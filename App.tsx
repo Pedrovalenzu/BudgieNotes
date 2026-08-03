@@ -18,7 +18,7 @@ import { Feather } from '@expo/vector-icons';
 import * as Clipboard from 'expo-clipboard';
 import * as ImagePicker from 'expo-image-picker';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { useEditorBridge, RichText, useBridgeState, BridgeExtension, TenTapStartKit } from '@10play/tentap-editor';
+import { useEditorBridge, RichText, useBridgeState, BridgeExtension, TenTapStartKit, PlaceholderBridge } from '@10play/tentap-editor';
 
 interface Nota {
   id: string;
@@ -89,6 +89,39 @@ const BridgeTemaOscuro = new BridgeExtension({
   forceName: 'temaOscuro',
   extendCSS: CSS_EDITOR,
 });
+
+// El checkbox de tarea de Tiptap hace focus() internamente al marcar/desmarcar y a veces
+// la selección salta al final del documento. Guardamos el cursor justo antes del click
+// y lo restauramos después, sin tocar el foco (el teclado se queda como estaba).
+const JS_MANTENER_CURSOR_EN_TAREAS = `
+  (function() {
+    if (window.__mantenerCursorTarea) { return true; }
+    window.__mantenerCursorTarea = true;
+    var rangoPrevio = null;
+    function esCheckboxTarea(el) {
+      return !!(el && el.tagName === 'INPUT' && el.type === 'checkbox' && el.closest('ul[data-type="taskList"]'));
+    }
+    document.addEventListener('mousedown', function (e) {
+      if (esCheckboxTarea(e.target)) {
+        var sel = window.getSelection();
+        rangoPrevio = sel && sel.rangeCount > 0 ? sel.getRangeAt(0).cloneRange() : null;
+      }
+    }, true);
+    document.addEventListener('change', function (e) {
+      if (esCheckboxTarea(e.target) && rangoPrevio) {
+        var rango = rangoPrevio;
+        setTimeout(function () {
+          var sel = window.getSelection();
+          if (sel) {
+            sel.removeAllRanges();
+            sel.addRange(rango);
+          }
+        }, 0);
+      }
+    });
+    true;
+  })();
+`;
 
 export default function App() {
   const [notas, setNotas] = useState<Nota[]>([]);
@@ -300,13 +333,17 @@ function ModalEditorNota({
     initialContent: nota?.contenido || '',
     avoidIosKeyboard: true,
     theme: { webview: { backgroundColor: '#0f0f0f' } },
-    bridgeExtensions: [...TenTapStartKit, BridgeTemaOscuro],
+    bridgeExtensions: [
+      ...TenTapStartKit,
+      BridgeTemaOscuro,
+      PlaceholderBridge.configureExtension({ placeholder: 'Escribe tu nota aquí...' }),
+    ],
   });
   const editorState = useBridgeState(editor);
 
   useEffect(() => {
     if (editorState.isReady) {
-      editor.setPlaceholder('Escribe tu nota aquí...');
+      editor.injectJS(JS_MANTENER_CURSOR_EN_TAREAS);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [editorState.isReady]);
@@ -466,7 +503,7 @@ function ModalEditorNota({
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#0f0f0f' },
-  header: { paddingHorizontal: 20, paddingTop: 20, paddingBottom: 10 },
+  header: { paddingHorizontal: 20, paddingTop: 40, paddingBottom: 10 },
   headerTitle: { fontSize: 30, fontWeight: '700', color: '#ffffff', letterSpacing: -0.5 },
   headerSubtitle: { fontSize: 13, color: '#555555', marginTop: 2 },
   listContent: { paddingHorizontal: 12, paddingBottom: 90 },
