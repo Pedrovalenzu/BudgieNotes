@@ -1,30 +1,94 @@
 import React, { useState, useEffect } from 'react';
-import { 
-  StyleSheet, 
-  Text, 
-  View, 
-  TouchableOpacity, 
-  FlatList, 
-  SafeAreaView, 
+import {
+  StyleSheet,
+  Text,
+  View,
+  TouchableOpacity,
+  FlatList,
+  SafeAreaView,
   StatusBar,
   Modal,
-  TextInput
+  TextInput,
+  Alert,
+  ScrollView,
+  KeyboardAvoidingView,
+  Platform,
 } from 'react-native';
 import { Feather } from '@expo/vector-icons';
 import * as Clipboard from 'expo-clipboard';
-// Importamos AsyncStorage para persistencia en disco
+import * as ImagePicker from 'expo-image-picker';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { useEditorBridge, RichText, useBridgeState, BridgeExtension, TenTapStartKit } from '@10play/tentap-editor';
 
 interface Nota {
   id: string;
   titulo: string;
-  contenido: string;
+  contenido: string; // HTML enriquecido (negrita, cursiva, tachado, código, tareas, imágenes)
   esCompartida: boolean;
   pinAcceso?: string;
   fecha: string;
 }
 
 const CLAVE_STORAGE = '@mis_notas_locales';
+
+// Convierte el HTML de una nota a texto plano para la previsualización de la tarjeta
+const textoPlano = (html: string) => {
+  if (!html) return '';
+  return html
+    .replace(/<(p|li|br|div)[^>]*>/gi, ' ')
+    .replace(/<[^>]+>/g, '')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/\s+/g, ' ')
+    .trim();
+};
+
+// Una nota con solo una imagen y sin texto no debe tratarse como vacía
+const contenidoVacio = (html: string) => !textoPlano(html) && !/<img\b/i.test(html);
+
+const CSS_EDITOR = `
+  html, body { background-color: #0f0f0f; margin: 0; }
+  .ProseMirror {
+    color: #ccc !important;
+    font-size: 15px;
+    line-height: 22px;
+    padding: 0;
+    caret-color: #ff6b00;
+  }
+  .ProseMirror, .ProseMirror p, .ProseMirror li, .ProseMirror div {
+    color: #ccc !important;
+  }
+  .ProseMirror p { margin: 0 0 8px 0; }
+  strong { color: #ff6b00 !important; }
+  code {
+    background-color: #1a1a1a;
+    color: #00ff88 !important;
+    padding: 2px 5px;
+    border-radius: 4px;
+    font-size: 0.85em;
+  }
+  s { color: #666 !important; }
+  img {
+    border-radius: 10px;
+    margin: 8px 0;
+  }
+  ul[data-type="taskList"] li > label > input {
+    border: 1px solid #555 !important;
+    background: #1a1a1a !important;
+    accent-color: #ff6b00;
+  }
+  .is-editor-empty:first-child::before { color: #333; }
+`;
+
+// Va en bridgeExtensions (no injectCSS) para que se aplique al cargar, sin el texto negro por defecto de por medio
+const BridgeTemaOscuro = new BridgeExtension({
+  forceName: 'temaOscuro',
+  extendCSS: CSS_EDITOR,
+});
 
 export default function App() {
   const [notas, setNotas] = useState<Nota[]>([]);
@@ -33,10 +97,7 @@ export default function App() {
   // Estados del Editor
   const [modalVisible, setModalVisible] = useState(false);
   const [notaSeleccionada, setNotaSeleccionada] = useState<Nota | null>(null);
-  const [tituloInput, setTituloInput] = useState('');
-  const [contenidoInput, setContenidoInput] = useState('');
-  const [esCompartidaInput, setEsCompartidaInput] = useState(false);
-  const [pinCopiado, setPinCopiado] = useState(false);
+  const [editorSession, setEditorSession] = useState(0);
 
   // 1. CARGAR NOTAS DEL MÓVIL AL ABRIR LA APP
   useEffect(() => {
@@ -66,34 +127,23 @@ export default function App() {
     }
   };
 
-  const copiarPinAlPortapapeles = async (pin: string) => {
-    if (!pin) return;
-    await Clipboard.setStringAsync(pin);
-    setPinCopiado(true);
-    setTimeout(() => setPinCopiado(false), 2000);
-  };
-
   const abrirCreador = () => {
     setNotaSeleccionada(null);
-    setTituloInput('');
-    setContenidoInput('');
-    setEsCompartidaInput(false);
-    setPinCopiado(false);
+    setEditorSession(s => s + 1);
     setModalVisible(true);
   };
 
   const abrirEditor = (nota: Nota) => {
     setNotaSeleccionada(nota);
-    setTituloInput(nota.titulo);
-    setContenidoInput(nota.contenido);
-    setEsCompartidaInput(nota.esCompartida);
-    setPinCopiado(false);
+    setEditorSession(s => s + 1);
     setModalVisible(true);
   };
 
   // 3. GUARDAR CAMBIOS (CREAR / EDITAR / ELIMINAR)
-  const guardarNota = () => {
-    if (!tituloInput.trim() && !contenidoInput.trim()) {
+  const guardarNota = (datos: { titulo: string; contenido: string; esCompartida: boolean }) => {
+    const { titulo, contenido, esCompartida } = datos;
+
+    if (!titulo.trim() && contenidoVacio(contenido)) {
       setModalVisible(false);
       return;
     }
@@ -101,28 +151,25 @@ export default function App() {
     let notasActualizadas: Nota[];
 
     if (notaSeleccionada) {
-      // Modificar nota existente
       notasActualizadas = notas.map(n => n.id === notaSeleccionada.id ? {
         ...n,
-        titulo: tituloInput,
-        contenido: contenidoInput,
-        esCompartida: esCompartidaInput,
-        pinAcceso: esCompartidaInput ? (n.pinAcceso || 'K9F-X2') : undefined
+        titulo,
+        contenido,
+        esCompartida,
+        pinAcceso: esCompartida ? (n.pinAcceso || 'K9F-X2') : undefined,
       } : n);
     } else {
-      // Crear nota nueva
       const nuevaNota: Nota = {
         id: Date.now().toString(),
-        titulo: tituloInput || 'Sin título',
-        contenido: contenidoInput,
-        esCompartida: esCompartidaInput,
-        pinAcceso: esCompartidaInput ? 'K9F-X2' : undefined,
-        fecha: new Date().toLocaleDateString('es-ES', { day: 'numeric', month: 'short' })
+        titulo: titulo || 'Sin título',
+        contenido,
+        esCompartida,
+        pinAcceso: esCompartida ? 'K9F-X2' : undefined,
+        fecha: new Date().toLocaleDateString('es-ES', { day: 'numeric', month: 'short' }),
       };
       notasActualizadas = [nuevaNota, ...notas];
     }
 
-    // Actualizar el estado visual Y persistir en el disco del móvil
     setNotas(notasActualizadas);
     guardarEnStorage(notasActualizadas);
     setModalVisible(false);
@@ -131,20 +178,33 @@ export default function App() {
   // 4. BORRAR UNA NOTA
   const borrarNota = () => {
     if (!notaSeleccionada) return;
-    
-    const notasFiltradas = notas.filter(n => n.id !== notaSeleccionada.id);
-    setNotas(notasFiltradas);
-    guardarEnStorage(notasFiltradas);
-    setModalVisible(false);
+
+    Alert.alert(
+      'Borrar nota',
+      '¿Seguro que quieres borrar esta nota? Esta acción no se puede deshacer.',
+      [
+        { text: 'Cancelar', style: 'cancel' },
+        {
+          text: 'Borrar',
+          style: 'destructive',
+          onPress: () => {
+            const notasFiltradas = notas.filter(n => n.id !== notaSeleccionada.id);
+            setNotas(notasFiltradas);
+            guardarEnStorage(notasFiltradas);
+            setModalVisible(false);
+          },
+        },
+      ]
+    );
   };
 
   return (
     <SafeAreaView style={styles.container}>
       <StatusBar barStyle="light-content" backgroundColor="#0f0f0f" />
-      
+
       {/* Cabecera */}
       <View style={styles.header}>
-        <Text style={styles.headerTitle}>Notas</Text>
+        <Text style={styles.headerTitle}>Budgie Notes</Text>
         <Text style={styles.headerSubtitle}>
           {cargando ? 'Cargando...' : `${notas.length} notas guardadas`}
         </Text>
@@ -167,8 +227,8 @@ export default function App() {
           ) : null
         )}
         renderItem={({ item }) => (
-          <TouchableOpacity 
-            style={styles.card} 
+          <TouchableOpacity
+            style={styles.card}
             activeOpacity={0.7}
             onPress={() => abrirEditor(item)}
           >
@@ -179,17 +239,17 @@ export default function App() {
             </View>
 
             <Text style={styles.cardContent} numberOfLines={4}>
-              {item.contenido || 'Nota vacía...'}
+              {textoPlano(item.contenido) || 'Nota vacía...'}
             </Text>
 
             <View style={styles.cardFooter}>
               <Text style={styles.cardDate}>{item.fecha}</Text>
-              
+
               <View style={[styles.badge, item.esCompartida ? styles.badgeCompartida : styles.badgeLocal]}>
-                <Feather 
-                  name={item.esCompartida ? "share-2" : "lock"} 
-                  size={10} 
-                  color={item.esCompartida ? "#ff6b00" : "#888"} 
+                <Feather
+                  name={item.esCompartida ? "share-2" : "lock"}
+                  size={10}
+                  color={item.esCompartida ? "#ff6b00" : "#888"}
                   style={{ marginRight: 4 }}
                 />
                 <Text style={[styles.badgeText, item.esCompartida && styles.badgeTextCompartida]}>
@@ -207,69 +267,148 @@ export default function App() {
       </TouchableOpacity>
 
       {/* MODAL / EDITOR DE NOTAS */}
-      <Modal visible={modalVisible} animationType="slide" transparent={false}>
-        <SafeAreaView style={styles.modalContainer}>
-          {/* Barra superior */}
-          <View style={styles.modalHeader}>
-            <TouchableOpacity onPress={() => setModalVisible(false)} style={styles.botonIcono}>
-              <Feather name="arrow-left" size={22} color="#888" />
-            </TouchableOpacity>
+      <ModalEditorNota
+        key={editorSession}
+        visible={modalVisible}
+        nota={notaSeleccionada}
+        onClose={() => setModalVisible(false)}
+        onSave={guardarNota}
+        onDelete={borrarNota}
+      />
+    </SafeAreaView>
+  );
+}
 
-            <TouchableOpacity 
-              style={[styles.badgeSelector, esCompartidaInput ? styles.badgeCompartida : styles.badgeLocal]}
-              onPress={() => setEsCompartidaInput(!esCompartidaInput)}
-            >
-              <Feather 
-                name={esCompartidaInput ? "share-2" : "lock"} 
-                size={12} 
-                color={esCompartidaInput ? "#ff6b00" : "#888"} 
-                style={{ marginRight: 6 }}
-              />
-              <Text style={[styles.badgeText, esCompartidaInput && styles.badgeTextCompartida]}>
-                {esCompartidaInput ? 'Compartida con PIN' : 'Solo Local'}
-              </Text>
-            </TouchableOpacity>
+function ModalEditorNota({
+  visible,
+  nota,
+  onClose,
+  onSave,
+  onDelete,
+}: {
+  visible: boolean;
+  nota: Nota | null;
+  onClose: () => void;
+  onSave: (datos: { titulo: string; contenido: string; esCompartida: boolean }) => void;
+  onDelete: () => void;
+}) {
+  const [tituloInput, setTituloInput] = useState(nota?.titulo ?? '');
+  const [esCompartidaInput, setEsCompartidaInput] = useState(nota?.esCompartida ?? false);
+  const [pinCopiado, setPinCopiado] = useState(false);
 
-            <View style={styles.modalAccionesDerecha}>
-              {notaSeleccionada && (
-                <TouchableOpacity onPress={borrarNota} style={styles.botonBorrar}>
-                  <Feather name="trash-2" size={20} color="#ff4444" />
-                </TouchableOpacity>
-              )}
-              <TouchableOpacity onPress={guardarNota}>
-                <Text style={styles.modalBotonGuardar}>Guardar</Text>
+  const editor = useEditorBridge({
+    initialContent: nota?.contenido || '',
+    avoidIosKeyboard: true,
+    theme: { webview: { backgroundColor: '#0f0f0f' } },
+    bridgeExtensions: [...TenTapStartKit, BridgeTemaOscuro],
+  });
+  const editorState = useBridgeState(editor);
+
+  useEffect(() => {
+    if (editorState.isReady) {
+      editor.setPlaceholder('Escribe tu nota aquí...');
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [editorState.isReady]);
+
+  const copiarPinAlPortapapeles = async (pin: string) => {
+    if (!pin) return;
+    await Clipboard.setStringAsync(pin);
+    setPinCopiado(true);
+    setTimeout(() => setPinCopiado(false), 2000);
+  };
+
+  const seleccionarImagen = async () => {
+    const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (status !== 'granted') {
+      Alert.alert('Permiso denegado', 'Necesitamos acceso a tu galería para añadir imágenes.');
+      return;
+    }
+    const resultado = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ['images'],
+      quality: 0.8,
+      base64: true,
+    });
+    const imagen = resultado.assets?.[0];
+    if (!resultado.canceled && imagen?.base64) {
+      const mime = imagen.mimeType || 'image/jpeg';
+      editor.setImage(`data:${mime};base64,${imagen.base64}`);
+    }
+  };
+
+  const guardar = async () => {
+    const contenido = await editor.getHTML();
+    onSave({ titulo: tituloInput, contenido, esCompartida: esCompartidaInput });
+  };
+
+  return (
+    <Modal visible={visible} animationType="slide" transparent={false}>
+      <SafeAreaView style={styles.modalContainer}>
+
+        {/* Barra superior */}
+        <View style={styles.modalHeader}>
+          <TouchableOpacity onPress={onClose} style={styles.botonIcono}>
+            <Feather name="arrow-left" size={22} color="#888" />
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={[styles.badgeSelector, esCompartidaInput ? styles.badgeCompartida : styles.badgeLocal]}
+            onPress={() => setEsCompartidaInput(!esCompartidaInput)}
+          >
+            <Feather
+              name={esCompartidaInput ? "share-2" : "lock"}
+              size={12}
+              color={esCompartidaInput ? "#ff6b00" : "#888"}
+              style={{ marginRight: 6 }}
+            />
+            <Text style={[styles.badgeText, esCompartidaInput && styles.badgeTextCompartida]}>
+              {esCompartidaInput ? 'Compartida con PIN' : 'Solo Local'}
+            </Text>
+          </TouchableOpacity>
+
+          <View style={styles.modalAccionesDerecha}>
+            {nota && (
+              <TouchableOpacity onPress={onDelete} style={styles.botonBorrar}>
+                <Feather name="trash-2" size={20} color="#ff4444" />
               </TouchableOpacity>
-            </View>
-          </View>
-
-          {/* Banner de PIN interactivo */}
-          {esCompartidaInput && (
-            <TouchableOpacity 
-              style={styles.pinBanner}
-              activeOpacity={0.7}
-              onPress={() => copiarPinAlPortapapeles(notaSeleccionada?.pinAcceso || 'K9F-X2')}
-            >
-              <View style={styles.pinInfo}>
-                <Feather name="key" size={14} color="#ff6b00" style={{ marginRight: 8 }} />
-                <Text style={styles.pinText}>
-                  PIN: <Text style={styles.pinCodigo}>{notaSeleccionada?.pinAcceso || 'Se generará al guardar'}</Text>
-                </Text>
-              </View>
-
-              <View style={styles.copiarAccion}>
-                <Feather 
-                  name={pinCopiado ? "check" : "copy"} 
-                  size={14} 
-                  color={pinCopiado ? "#00ff88" : "#888"} 
-                />
-                <Text style={[styles.copiarTexto, pinCopiado && styles.copiarTextoExito]}>
-                  {pinCopiado ? '¡Copiado!' : 'Copiar'}
-                </Text>
-              </View>
+            )}
+            <TouchableOpacity onPress={guardar}>
+              <Text style={styles.modalBotonGuardar}>Guardar</Text>
             </TouchableOpacity>
-          )}
+          </View>
+        </View>
 
-          {/* Formulario */}
+        {/* Banner de PIN interactivo */}
+        {esCompartidaInput && (
+          <TouchableOpacity
+            style={styles.pinBanner}
+            activeOpacity={0.7}
+            onPress={() => copiarPinAlPortapapeles(nota?.pinAcceso || 'K9F-X2')}
+          >
+            <View style={styles.pinInfo}>
+              <Feather name="key" size={14} color="#ff6b00" style={{ marginRight: 8 }} />
+              <Text style={styles.pinText}>
+                PIN: <Text style={styles.pinCodigo}>{nota?.pinAcceso || 'Se generará al guardar'}</Text>
+              </Text>
+            </View>
+            <View style={styles.copiarAccion}>
+              <Feather
+                name={pinCopiado ? "check" : "copy"}
+                size={14}
+                color={pinCopiado ? "#00ff88" : "#888"}
+              />
+              <Text style={[styles.copiarTexto, pinCopiado && styles.copiarTextoExito]}>
+                {pinCopiado ? '¡Copiado!' : 'Copiar'}
+              </Text>
+            </View>
+          </TouchableOpacity>
+        )}
+
+        {/* Cuerpo del editor + barra de herramientas */}
+        <KeyboardAvoidingView
+          style={{ flex: 1 }}
+          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        >
           <View style={styles.editorBody}>
             <TextInput
               style={styles.inputTitulo}
@@ -278,19 +417,50 @@ export default function App() {
               value={tituloInput}
               onChangeText={setTituloInput}
             />
-            <TextInput
-              style={styles.inputContenido}
-              placeholder="Escribe tu nota aquí..."
-              placeholderTextColor="#333"
-              multiline
-              textAlignVertical="top"
-              value={contenidoInput}
-              onChangeText={setContenidoInput}
-            />
+
+            <RichText editor={editor} />
           </View>
-        </SafeAreaView>
-      </Modal>
-    </SafeAreaView>
+
+          {/* Barra de herramientas */}
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            style={styles.toolbar}
+            contentContainerStyle={styles.toolbarContent}
+            keyboardShouldPersistTaps="always"
+          >
+            <TouchableOpacity style={styles.toolbarBtn} onPress={seleccionarImagen}>
+              <Feather name="image" size={17} color="#888" />
+            </TouchableOpacity>
+
+            <View style={styles.toolbarDivider} />
+
+            <TouchableOpacity style={styles.toolbarBtn} onPress={() => editor.toggleTaskList()}>
+              <Feather name="check-square" size={17} color={editorState.isTaskListActive ? '#ff6b00' : '#888'} />
+            </TouchableOpacity>
+
+            <View style={styles.toolbarDivider} />
+
+            <TouchableOpacity style={styles.toolbarBtn} onPress={() => editor.toggleBold()}>
+              <Text style={[styles.toolbarBtnText, editorState.isBoldActive && styles.toolbarBtnTextActivo]}>B</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity style={styles.toolbarBtn} onPress={() => editor.toggleItalic()}>
+              <Text style={[styles.toolbarBtnText, { fontStyle: 'italic' }, editorState.isItalicActive && styles.toolbarBtnTextActivo]}>I</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity style={styles.toolbarBtn} onPress={() => editor.toggleStrike()}>
+              <Text style={[styles.toolbarBtnText, { textDecorationLine: 'line-through' }, editorState.isStrikeActive && styles.toolbarBtnTextActivo]}>S</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity style={styles.toolbarBtn} onPress={() => editor.toggleCode()}>
+              <Feather name="code" size={16} color={editorState.isCodeActive ? '#ff6b00' : '#888'} />
+            </TouchableOpacity>
+          </ScrollView>
+        </KeyboardAvoidingView>
+
+      </SafeAreaView>
+    </Modal>
   );
 }
 
@@ -303,7 +473,7 @@ const styles = StyleSheet.create({
   columnWrapper: { justifyContent: 'space-between' },
   emptyContainer: { alignItems: 'center', justifyContent: 'center', marginTop: 60 },
   emptyText: { color: '#444', fontSize: 14, marginTop: 10 },
-  
+
   card: {
     backgroundColor: '#181818',
     width: '48%',
@@ -320,7 +490,7 @@ const styles = StyleSheet.create({
   cardContent: { fontSize: 12, color: '#777777', lineHeight: 17, marginBottom: 12 },
   cardFooter: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 'auto' },
   cardDate: { fontSize: 11, color: '#444444' },
-  
+
   badge: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 7, paddingVertical: 3, borderRadius: 5 },
   badgeSelector: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 10, paddingVertical: 5, borderRadius: 6 },
   badgeLocal: { backgroundColor: '#222222' },
@@ -341,31 +511,33 @@ const styles = StyleSheet.create({
     elevation: 5,
   },
 
-  modalContainer: { flex: 1, backgroundColor: '#0f0f0f', paddingHorizontal: 20 },
-  modalHeader: { 
-    flexDirection: 'row', 
-    justifyContent: 'space-between', 
-    alignItems: 'center', 
+  modalContainer: { flex: 1, backgroundColor: '#0f0f0f' },
+  modalHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingHorizontal: 20,
     paddingVertical: 14,
     borderBottomWidth: 1,
-    borderBottomColor: '#1a1a1a'
+    borderBottomColor: '#1a1a1a',
   },
   botonIcono: { padding: 4 },
   modalAccionesDerecha: { flexDirection: 'row', alignItems: 'center' },
   botonBorrar: { marginRight: 15, padding: 4 },
   modalBotonGuardar: { color: '#ff6b00', fontSize: 15, fontWeight: '600' },
-  
-  pinBanner: { 
+
+  pinBanner: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    backgroundColor: '#181818', 
+    backgroundColor: '#181818',
     paddingHorizontal: 14,
-    paddingVertical: 10, 
-    borderRadius: 8, 
-    marginTop: 15, 
-    borderWidth: 1, 
-    borderColor: '#222' 
+    paddingVertical: 10,
+    borderRadius: 8,
+    marginTop: 15,
+    marginHorizontal: 20,
+    borderWidth: 1,
+    borderColor: '#222'
   },
   pinInfo: { flexDirection: 'row', alignItems: 'center' },
   pinText: { color: '#888', fontSize: 12 },
@@ -374,7 +546,20 @@ const styles = StyleSheet.create({
   copiarTexto: { fontSize: 11, color: '#888', marginLeft: 4, fontWeight: '500' },
   copiarTextoExito: { color: '#00ff88' },
 
-  editorBody: { flex: 1, marginTop: 15 },
+  editorBody: { flex: 1, marginTop: 15, paddingHorizontal: 20 },
   inputTitulo: { fontSize: 22, fontWeight: '700', color: '#fff', marginBottom: 15 },
-  inputContenido: { flex: 1, fontSize: 15, color: '#ccc', lineHeight: 22 },
+
+  toolbar: {
+    height: 34,
+    flexGrow: 0.03,
+    flexShrink: 0,
+    borderTopWidth: 1,
+    borderTopColor: '#1a1a1a',
+    backgroundColor: '#0f0f0f',
+  },
+  toolbarContent: { paddingHorizontal: 19, alignItems: 'center', height: 44 },
+  toolbarBtn: { paddingVertical: 6, paddingHorizontal: 10, marginHorizontal: 1 },
+  toolbarBtnText: { fontSize: 24, fontWeight: '700', color: '#888' },
+  toolbarBtnTextActivo: { color: '#ff6b00' },
+  toolbarDivider: { width: 1, height: 14, backgroundColor: '#222', marginHorizontal: 4 },
 });
