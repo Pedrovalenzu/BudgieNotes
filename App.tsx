@@ -27,6 +27,7 @@ interface Nota {
   esCompartida: boolean;
   pinAcceso?: string;
   fecha: string;
+  expiraEn?: number; // timestamp (ms); pasado ese momento la nota se autodestruye
 }
 
 const CLAVE_STORAGE = '@mis_notas_locales';
@@ -49,6 +50,20 @@ const textoPlano = (html: string) => {
 
 // Una nota con solo una imagen y sin texto no debe tratarse como vacía
 const contenidoVacio = (html: string) => !textoPlano(html) && !/<img\b/i.test(html);
+
+const notaExpirada = (nota: Nota) => typeof nota.expiraEn === 'number' && nota.expiraEn <= Date.now();
+
+const formatoFechaHora = (timestamp: number) =>
+  `${new Date(timestamp).toLocaleDateString('es-ES', { day: 'numeric', month: 'short' })}, ${new Date(timestamp).toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' })}`;
+
+// Se comprueban en el propio dispositivo (no hay backend), así que solo se aplica mientras la app está abierta
+const OPCIONES_CADUCIDAD: { texto: string; horas: number }[] = [
+  { texto: '1 hora', horas: 1 },
+  { texto: '6 horas', horas: 6 },
+  { texto: '24 horas', horas: 24 },
+  { texto: '3 días', horas: 72 },
+  { texto: '7 días', horas: 168 },
+];
 
 const CSS_EDITOR = `
   html, body { background-color: #0f0f0f; margin: 0; }
@@ -137,11 +152,31 @@ export default function App() {
     cargarNotasGuardadas();
   }, []);
 
+  // Mientras la app está abierta, revisa cada minuto si alguna nota ha caducado y la borra
+  useEffect(() => {
+    const intervalo = setInterval(() => {
+      setNotas(prev => {
+        const vigentes = prev.filter(n => !notaExpirada(n));
+        if (vigentes.length !== prev.length) {
+          guardarEnStorage(vigentes);
+          return vigentes;
+        }
+        return prev;
+      });
+    }, 60000);
+    return () => clearInterval(intervalo);
+  }, []);
+
   const cargarNotasGuardadas = async () => {
     try {
       const datosJson = await AsyncStorage.getItem(CLAVE_STORAGE);
       if (datosJson !== null) {
-        setNotas(JSON.parse(datosJson));
+        const notasGuardadas: Nota[] = JSON.parse(datosJson);
+        const vigentes = notasGuardadas.filter(n => !notaExpirada(n));
+        setNotas(vigentes);
+        if (vigentes.length !== notasGuardadas.length) {
+          guardarEnStorage(vigentes);
+        }
       }
     } catch (error) {
       console.error('Error al cargar notas del almacenamiento local:', error);
@@ -173,8 +208,8 @@ export default function App() {
   };
 
   // 3. GUARDAR CAMBIOS (CREAR / EDITAR / ELIMINAR)
-  const guardarNota = (datos: { titulo: string; contenido: string; esCompartida: boolean }) => {
-    const { titulo, contenido, esCompartida } = datos;
+  const guardarNota = (datos: { titulo: string; contenido: string; esCompartida: boolean; expiraEn?: number }) => {
+    const { titulo, contenido, esCompartida, expiraEn } = datos;
 
     if (!titulo.trim() && contenidoVacio(contenido)) {
       setModalVisible(false);
@@ -190,6 +225,7 @@ export default function App() {
         contenido,
         esCompartida,
         pinAcceso: esCompartida ? (n.pinAcceso || 'K9F-X2') : undefined,
+        expiraEn,
       } : n);
     } else {
       const nuevaNota: Nota = {
@@ -199,6 +235,7 @@ export default function App() {
         esCompartida,
         pinAcceso: esCompartida ? 'K9F-X2' : undefined,
         fecha: new Date().toLocaleDateString('es-ES', { day: 'numeric', month: 'short' }),
+        expiraEn,
       };
       notasActualizadas = [nuevaNota, ...notas];
     }
@@ -278,16 +315,21 @@ export default function App() {
             <View style={styles.cardFooter}>
               <Text style={styles.cardDate}>{item.fecha}</Text>
 
-              <View style={[styles.badge, item.esCompartida ? styles.badgeCompartida : styles.badgeLocal]}>
-                <Feather
-                  name={item.esCompartida ? "share-2" : "lock"}
-                  size={10}
-                  color={item.esCompartida ? "#ff6b00" : "#888"}
-                  style={{ marginRight: 4 }}
-                />
-                <Text style={[styles.badgeText, item.esCompartida && styles.badgeTextCompartida]}>
-                  {item.esCompartida ? 'PIN' : 'Local'}
-                </Text>
+              <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                {item.expiraEn !== undefined && (
+                  <Feather name="clock" size={11} color="#ff6b00" style={{ marginRight: 6 }} />
+                )}
+                <View style={[styles.badge, item.esCompartida ? styles.badgeCompartida : styles.badgeLocal]}>
+                  <Feather
+                    name={item.esCompartida ? "share-2" : "lock"}
+                    size={10}
+                    color={item.esCompartida ? "#ff6b00" : "#888"}
+                    style={{ marginRight: 4 }}
+                  />
+                  <Text style={[styles.badgeText, item.esCompartida && styles.badgeTextCompartida]}>
+                    {item.esCompartida ? 'PIN' : 'Local'}
+                  </Text>
+                </View>
               </View>
             </View>
           </TouchableOpacity>
@@ -322,12 +364,14 @@ function ModalEditorNota({
   visible: boolean;
   nota: Nota | null;
   onClose: () => void;
-  onSave: (datos: { titulo: string; contenido: string; esCompartida: boolean }) => void;
+  onSave: (datos: { titulo: string; contenido: string; esCompartida: boolean; expiraEn?: number }) => void;
   onDelete: () => void;
 }) {
   const [tituloInput, setTituloInput] = useState(nota?.titulo ?? '');
   const [esCompartidaInput, setEsCompartidaInput] = useState(nota?.esCompartida ?? false);
   const [pinCopiado, setPinCopiado] = useState(false);
+  const [expiraEnInput, setExpiraEnInput] = useState<number | undefined>(nota?.expiraEn);
+  const [mostrarOpcionesCaducidad, setMostrarOpcionesCaducidad] = useState(false);
 
   const editor = useEditorBridge({
     initialContent: nota?.contenido || '',
@@ -355,6 +399,16 @@ function ModalEditorNota({
     setTimeout(() => setPinCopiado(false), 2000);
   };
 
+  const elegirDuracion = (horas: number) => {
+    setExpiraEnInput(Date.now() + horas * 60 * 60 * 1000);
+    setMostrarOpcionesCaducidad(false);
+  };
+
+  const quitarCaducidad = () => {
+    setExpiraEnInput(undefined);
+    setMostrarOpcionesCaducidad(false);
+  };
+
   const seleccionarImagen = async () => {
     const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
     if (status !== 'granted') {
@@ -375,7 +429,7 @@ function ModalEditorNota({
 
   const guardar = async () => {
     const contenido = await editor.getHTML();
-    onSave({ titulo: tituloInput, contenido, esCompartida: esCompartidaInput });
+    onSave({ titulo: tituloInput, contenido, esCompartida: esCompartidaInput, expiraEn: expiraEnInput });
   };
 
   return (
@@ -440,6 +494,58 @@ function ModalEditorNota({
             </View>
           </TouchableOpacity>
         )}
+
+        {/* Banner de autodestrucción */}
+        <TouchableOpacity
+          style={styles.pinBanner}
+          activeOpacity={0.7}
+          onPress={() => setMostrarOpcionesCaducidad(true)}
+        >
+          <View style={styles.pinInfo}>
+            <Feather name="clock" size={14} color={expiraEnInput !== undefined ? '#ff6b00' : '#888'} style={{ marginRight: 8 }} />
+            <Text style={styles.pinText}>
+              {expiraEnInput !== undefined
+                ? <>Se borra el <Text style={styles.pinCodigo}>{formatoFechaHora(expiraEnInput)}</Text></>
+                : 'Sin caducidad'}
+            </Text>
+          </View>
+          <Feather name="chevron-right" size={16} color="#888" />
+        </TouchableOpacity>
+
+        {/* Panel de opciones de caducidad (Alert.alert no soporta más de 3 botones en Android) */}
+        <Modal
+          visible={mostrarOpcionesCaducidad}
+          transparent
+          animationType="fade"
+          onRequestClose={() => setMostrarOpcionesCaducidad(false)}
+        >
+          <TouchableOpacity
+            style={styles.opcionesFondo}
+            activeOpacity={1}
+            onPress={() => setMostrarOpcionesCaducidad(false)}
+          >
+            <TouchableOpacity style={styles.opcionesTarjeta} activeOpacity={1} onPress={() => {}}>
+              <Text style={styles.opcionesTitulo}>Autodestrucción</Text>
+              <Text style={styles.opcionesSubtitulo}>Pasado ese tiempo la nota se borrará automáticamente.</Text>
+
+              {OPCIONES_CADUCIDAD.map(o => (
+                <TouchableOpacity key={o.horas} style={styles.opcionFila} onPress={() => elegirDuracion(o.horas)}>
+                  <Text style={styles.opcionTexto}>{o.texto}</Text>
+                </TouchableOpacity>
+              ))}
+
+              {expiraEnInput !== undefined && (
+                <TouchableOpacity style={styles.opcionFila} onPress={quitarCaducidad}>
+                  <Text style={[styles.opcionTexto, styles.opcionTextoQuitar]}>Quitar caducidad</Text>
+                </TouchableOpacity>
+              )}
+
+              <TouchableOpacity style={styles.opcionFila} onPress={() => setMostrarOpcionesCaducidad(false)}>
+                <Text style={[styles.opcionTexto, styles.opcionTextoCancelar]}>Cancelar</Text>
+              </TouchableOpacity>
+            </TouchableOpacity>
+          </TouchableOpacity>
+        </Modal>
 
         {/* Cuerpo del editor + barra de herramientas */}
         <KeyboardAvoidingView
@@ -586,6 +692,22 @@ const styles = StyleSheet.create({
   copiarAccion: { flexDirection: 'row', alignItems: 'center' },
   copiarTexto: { fontSize: 11, color: '#888', marginLeft: 4, fontWeight: '500' },
   copiarTextoExito: { color: '#00ff88' },
+
+  opcionesFondo: { flex: 1, backgroundColor: 'rgba(0,0,0,0.6)', justifyContent: 'flex-end' },
+  opcionesTarjeta: {
+    backgroundColor: '#181818',
+    borderTopLeftRadius: 16,
+    borderTopRightRadius: 16,
+    paddingHorizontal: 20,
+    paddingTop: 20,
+    paddingBottom: 34,
+  },
+  opcionesTitulo: { fontSize: 16, fontWeight: '700', color: '#fff', marginBottom: 4 },
+  opcionesSubtitulo: { fontSize: 12, color: '#777', marginBottom: 12 },
+  opcionFila: { paddingVertical: 14, borderTopWidth: 1, borderTopColor: '#222' },
+  opcionTexto: { fontSize: 15, color: '#ccc' },
+  opcionTextoQuitar: { color: '#ff4444' },
+  opcionTextoCancelar: { color: '#888' },
 
   editorBody: { flex: 1, marginTop: 15, paddingHorizontal: 20 },
   inputTitulo: { fontSize: 22, fontWeight: '700', color: '#fff', marginBottom: 15 },
