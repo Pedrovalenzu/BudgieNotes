@@ -19,6 +19,8 @@ import * as Clipboard from 'expo-clipboard';
 import * as ImagePicker from 'expo-image-picker';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useEditorBridge, RichText, useBridgeState, BridgeExtension, TenTapStartKit, PlaceholderBridge } from '@10play/tentap-editor';
+import { generarPin } from './lib/pin';
+import { generarSalBase64 } from './lib/cifrado';
 
 interface Nota {
   id: string;
@@ -26,6 +28,7 @@ interface Nota {
   contenido: string; // HTML enriquecido (negrita, cursiva, tachado, código, tareas, imágenes)
   esCompartida: boolean;
   pinAcceso?: string;
+  salCifrado?: string; // aleatorio, generado junto al PIN; base de la clave de cifrado (ver lib/cifrado.ts)
   fecha: string;
   expiraEn?: number; // timestamp (ms); pasado ese momento la nota se autodestruye
 }
@@ -208,8 +211,15 @@ export default function App() {
   };
 
   // 3. GUARDAR CAMBIOS (CREAR / EDITAR / ELIMINAR)
-  const guardarNota = (datos: { titulo: string; contenido: string; esCompartida: boolean; expiraEn?: number }) => {
-    const { titulo, contenido, esCompartida, expiraEn } = datos;
+  const guardarNota = (datos: {
+    titulo: string;
+    contenido: string;
+    esCompartida: boolean;
+    expiraEn?: number;
+    pinAcceso?: string;
+    salCifrado?: string;
+  }) => {
+    const { titulo, contenido, esCompartida, expiraEn, pinAcceso, salCifrado } = datos;
 
     if (!titulo.trim() && contenidoVacio(contenido)) {
       setModalVisible(false);
@@ -224,7 +234,8 @@ export default function App() {
         titulo,
         contenido,
         esCompartida,
-        pinAcceso: esCompartida ? (n.pinAcceso || 'K9F-X2') : undefined,
+        pinAcceso: esCompartida ? pinAcceso : undefined,
+        salCifrado: esCompartida ? salCifrado : undefined,
         expiraEn,
       } : n);
     } else {
@@ -233,7 +244,8 @@ export default function App() {
         titulo: titulo || 'Sin título',
         contenido,
         esCompartida,
-        pinAcceso: esCompartida ? 'K9F-X2' : undefined,
+        pinAcceso: esCompartida ? pinAcceso : undefined,
+        salCifrado: esCompartida ? salCifrado : undefined,
         fecha: new Date().toLocaleDateString('es-ES', { day: 'numeric', month: 'short' }),
         expiraEn,
       };
@@ -364,11 +376,20 @@ function ModalEditorNota({
   visible: boolean;
   nota: Nota | null;
   onClose: () => void;
-  onSave: (datos: { titulo: string; contenido: string; esCompartida: boolean; expiraEn?: number }) => void;
+  onSave: (datos: {
+    titulo: string;
+    contenido: string;
+    esCompartida: boolean;
+    expiraEn?: number;
+    pinAcceso?: string;
+    salCifrado?: string;
+  }) => void;
   onDelete: () => void;
 }) {
   const [tituloInput, setTituloInput] = useState(nota?.titulo ?? '');
   const [esCompartidaInput, setEsCompartidaInput] = useState(nota?.esCompartida ?? false);
+  const [pinInput, setPinInput] = useState(nota?.pinAcceso);
+  const [salInput, setSalInput] = useState(nota?.salCifrado);
   const [pinCopiado, setPinCopiado] = useState(false);
   const [expiraEnInput, setExpiraEnInput] = useState<number | undefined>(nota?.expiraEn);
   const [mostrarOpcionesCaducidad, setMostrarOpcionesCaducidad] = useState(false);
@@ -399,6 +420,16 @@ function ModalEditorNota({
     setTimeout(() => setPinCopiado(false), 2000);
   };
 
+  const alternarCompartida = async () => {
+    const nuevoValor = !esCompartidaInput;
+    setEsCompartidaInput(nuevoValor);
+    if (nuevoValor && !pinInput) {
+      const [pin, sal] = await Promise.all([generarPin(), generarSalBase64()]);
+      setPinInput(pin);
+      setSalInput(sal);
+    }
+  };
+
   const elegirDuracion = (horas: number) => {
     setExpiraEnInput(Date.now() + horas * 60 * 60 * 1000);
     setMostrarOpcionesCaducidad(false);
@@ -421,15 +452,24 @@ function ModalEditorNota({
       base64: true,
     });
     const imagen = resultado.assets?.[0];
-    if (!resultado.canceled && imagen?.base64) {
-      const mime = imagen.mimeType || 'image/jpeg';
-      editor.setImage(`data:${mime};base64,${imagen.base64}`);
-    }
+    if (resultado.canceled || !imagen?.base64) return;
+
+    const mime = imagen.mimeType || 'image/jpeg';
+    editor.setImage(`data:${mime};base64,${imagen.base64}`);
+    // Para notas compartidas, cifrarContenidoNota() se encarga de subir esta imagen a Storage
+    // (cifrada) y sustituir este data URI por su URL cuando la nota se envíe a Supabase.
   };
 
   const guardar = async () => {
     const contenido = await editor.getHTML();
-    onSave({ titulo: tituloInput, contenido, esCompartida: esCompartidaInput, expiraEn: expiraEnInput });
+    onSave({
+      titulo: tituloInput,
+      contenido,
+      esCompartida: esCompartidaInput,
+      expiraEn: expiraEnInput,
+      pinAcceso: pinInput,
+      salCifrado: salInput,
+    });
   };
 
   return (
@@ -444,7 +484,7 @@ function ModalEditorNota({
 
           <TouchableOpacity
             style={[styles.badgeSelector, esCompartidaInput ? styles.badgeCompartida : styles.badgeLocal]}
-            onPress={() => setEsCompartidaInput(!esCompartidaInput)}
+            onPress={alternarCompartida}
           >
             <Feather
               name={esCompartidaInput ? "share-2" : "lock"}
@@ -474,12 +514,12 @@ function ModalEditorNota({
           <TouchableOpacity
             style={styles.pinBanner}
             activeOpacity={0.7}
-            onPress={() => copiarPinAlPortapapeles(nota?.pinAcceso || 'K9F-X2')}
+            onPress={() => pinInput && copiarPinAlPortapapeles(pinInput)}
           >
             <View style={styles.pinInfo}>
               <Feather name="key" size={14} color="#ff6b00" style={{ marginRight: 8 }} />
               <Text style={styles.pinText}>
-                PIN: <Text style={styles.pinCodigo}>{nota?.pinAcceso || 'Se generará al guardar'}</Text>
+                PIN: <Text style={styles.pinCodigo}>{pinInput || 'Generando...'}</Text>
               </Text>
             </View>
             <View style={styles.copiarAccion}>
