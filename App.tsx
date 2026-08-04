@@ -21,6 +21,8 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useEditorBridge, RichText, useBridgeState, BridgeExtension, TenTapStartKit, PlaceholderBridge } from '@10play/tentap-editor';
 import { generarPin } from './lib/pin';
 import { generarSalBase64 } from './lib/cifrado';
+import { asegurarSesionAnonima } from './lib/auth';
+import { supabase } from './lib/supabase';
 
 interface Nota {
   id: string;
@@ -153,6 +155,14 @@ export default function App() {
   // 1. CARGAR NOTAS DEL MÓVIL AL ABRIR LA APP
   useEffect(() => {
     cargarNotasGuardadas();
+  }, []);
+
+  // Sesión anónima de Supabase (si está configurado): la necesita RLS para saber quién es el
+  // creador/participante de una nota compartida. No pide login, es transparente para el usuario.
+  useEffect(() => {
+    if (supabase) {
+      asegurarSesionAnonima().catch(error => console.error('Error al iniciar sesión anónima:', error));
+    }
   }, []);
 
   // Mientras la app está abierta, revisa cada minuto si alguna nota ha caducado y la borra
