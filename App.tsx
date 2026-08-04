@@ -467,13 +467,17 @@ function ModalEditorNota({
             keyboardShouldPersistTaps="always"
           >
             <TouchableOpacity style={styles.toolbarBtn} onPress={seleccionarImagen}>
-              <Feather name="image" size={17} color="#888" />
+              <Feather name="image" size={20} color="#888" />
             </TouchableOpacity>
 
             <View style={styles.toolbarDivider} />
 
             <TouchableOpacity style={styles.toolbarBtn} onPress={() => editor.toggleTaskList()}>
-              <Feather name="check-square" size={17} color={editorState.isTaskListActive ? '#ff6b00' : '#888'} />
+              <Feather name="check-square" size={20} color={editorState.isTaskListActive ? '#ff6b00' : '#888'} />
+            </TouchableOpacity>
+
+            <TouchableOpacity style={styles.toolbarBtn} onPress={() => editor.toggleBulletList()}>
+              <Feather name="list" size={20} color={editorState.isBulletListActive ? '#ff6b00' : '#888'} />
             </TouchableOpacity>
 
             <View style={styles.toolbarDivider} />
@@ -491,7 +495,7 @@ function ModalEditorNota({
             </TouchableOpacity>
 
             <TouchableOpacity style={styles.toolbarBtn} onPress={() => editor.toggleCode()}>
-              <Feather name="code" size={16} color={editorState.isCodeActive ? '#ff6b00' : '#888'} />
+              <Feather name="code" size={20} color={editorState.isCodeActive ? '#ff6b00' : '#888'} />
             </TouchableOpacity>
           </ScrollView>
         </KeyboardAvoidingView>
@@ -587,16 +591,16 @@ const styles = StyleSheet.create({
   inputTitulo: { fontSize: 22, fontWeight: '700', color: '#fff', marginBottom: 15 },
 
   toolbar: {
-    height: 34,
+    height: 44,
     flexGrow: 0.03,
     flexShrink: 0,
     borderTopWidth: 1,
     borderTopColor: '#1a1a1a',
     backgroundColor: '#0f0f0f',
   },
-  toolbarContent: { paddingHorizontal: 19, alignItems: 'center', height: 44 },
+  toolbarContent: { paddingHorizontal: 19, alignItems: 'center', height: 54 },
   toolbarBtn: { paddingVertical: 6, paddingHorizontal: 10, marginHorizontal: 1 },
-  toolbarBtnText: { fontSize: 24, fontWeight: '700', color: '#888' },
+  toolbarBtnText: { fontSize: 30, fontWeight: '700', color: '#888' },
   toolbarBtnTextActivo: { color: '#ff6b00' },
-  toolbarDivider: { width: 1, height: 14, backgroundColor: '#222', marginHorizontal: 4 },
+  toolbarDivider: { width: 1, height: 20, backgroundColor: '#222', marginHorizontal: 4 },
 });
