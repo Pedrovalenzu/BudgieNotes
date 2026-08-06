@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import {
+  ActivityIndicator,
   StyleSheet,
   Text,
   View,
@@ -20,20 +21,14 @@ import * as ImagePicker from 'expo-image-picker';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useEditorBridge, RichText, useBridgeState, BridgeExtension, TenTapStartKit, PlaceholderBridge } from '@10play/tentap-editor';
 import { generarPin } from './lib/pin';
-import { generarSalBase64 } from './lib/cifrado';
+import { generarSalBase64, derivarClaveDesdePin } from './lib/cifrado';
 import { asegurarSesionAnonima } from './lib/auth';
 import { supabase } from './lib/supabase';
-
-interface Nota {
-  id: string;
-  titulo: string;
-  contenido: string; // HTML enriquecido (negrita, cursiva, tachado, código, tareas, imágenes)
-  esCompartida: boolean;
-  pinAcceso?: string;
-  salCifrado?: string; // aleatorio, generado junto al PIN; base de la clave de cifrado (ver lib/cifrado.ts)
-  fecha: string;
-  expiraEn?: number; // timestamp (ms); pasado ese momento la nota se autodestruye
-}
+import { cargarNotaCompartida, crearNotaCompartida, guardarNotaCompartida, unirseANotaPorPin } from './lib/notasCompartidas';
+import { mensajeDeError } from './lib/errores';
+import { Nota } from './types';
+import ModalUnirseNota from './components/ModalUnirseNota';
+import ModalParticipantes from './components/ModalParticipantes';
 
 const CLAVE_STORAGE = '@mis_notas_locales';
 
@@ -151,6 +146,8 @@ export default function App() {
   const [modalVisible, setModalVisible] = useState(false);
   const [notaSeleccionada, setNotaSeleccionada] = useState<Nota | null>(null);
   const [editorSession, setEditorSession] = useState(0);
+  const [mostrarUnirse, setMostrarUnirse] = useState(false);
+  const [cargandoNotaId, setCargandoNotaId] = useState<string | null>(null);
 
   // 1. CARGAR NOTAS DEL MÓVIL AL ABRIR LA APP
   useEffect(() => {
@@ -214,8 +211,39 @@ export default function App() {
     setModalVisible(true);
   };
 
-  const abrirEditor = (nota: Nota) => {
-    setNotaSeleccionada(nota);
+  const abrirEditor = async (nota: Nota) => {
+    // Notas locales: se abre tal cual, sin red de por medio.
+    if (!nota.esCompartida || !nota.notaCompartidaId || !nota.pinAcceso || !nota.salCifrado) {
+      setNotaSeleccionada(nota);
+      setEditorSession(s => s + 1);
+      setModalVisible(true);
+      return;
+    }
+
+    // Notas compartidas: la copia local puede estar desactualizada si otro participante ha
+    // editado desde entonces. Se pide primero la versión actual a Supabase y se descifra, en vez
+    // de abrir directamente lo último que se guardó en este dispositivo.
+    setCargandoNotaId(nota.id);
+    let notaParaAbrir = nota;
+    try {
+      const clave = await derivarClaveDesdePin(nota.pinAcceso, nota.salCifrado);
+      const { titulo, contenidoHtml } = await cargarNotaCompartida(nota.notaCompartidaId, clave);
+      notaParaAbrir = { ...nota, titulo, contenido: contenidoHtml };
+
+      const notasActualizadas = notas.map(n => (n.id === nota.id ? notaParaAbrir : n));
+      setNotas(notasActualizadas);
+      guardarEnStorage(notasActualizadas);
+    } catch (error) {
+      console.error('Error al refrescar la nota compartida:', error);
+      Alert.alert(
+        'Sin conexión con la nube',
+        'No se ha podido comprobar si hay cambios nuevos. Se abre la última versión guardada en este dispositivo.'
+      );
+    } finally {
+      setCargandoNotaId(null);
+    }
+
+    setNotaSeleccionada(notaParaAbrir);
     setEditorSession(s => s + 1);
     setModalVisible(true);
   };
@@ -228,8 +256,10 @@ export default function App() {
     expiraEn?: number;
     pinAcceso?: string;
     salCifrado?: string;
+    notaCompartidaId?: string;
+    esCreador?: boolean;
   }) => {
-    const { titulo, contenido, esCompartida, expiraEn, pinAcceso, salCifrado } = datos;
+    const { titulo, contenido, esCompartida, expiraEn, pinAcceso, salCifrado, notaCompartidaId, esCreador } = datos;
 
     if (!titulo.trim() && contenidoVacio(contenido)) {
       setModalVisible(false);
@@ -246,6 +276,8 @@ export default function App() {
         esCompartida,
         pinAcceso: esCompartida ? pinAcceso : undefined,
         salCifrado: esCompartida ? salCifrado : undefined,
+        notaCompartidaId: esCompartida ? notaCompartidaId : undefined,
+        esCreador: esCompartida ? esCreador : undefined,
         expiraEn,
       } : n);
     } else {
@@ -256,6 +288,8 @@ export default function App() {
         esCompartida,
         pinAcceso: esCompartida ? pinAcceso : undefined,
         salCifrado: esCompartida ? salCifrado : undefined,
+        notaCompartidaId: esCompartida ? notaCompartidaId : undefined,
+        esCreador: esCompartida ? esCreador : undefined,
         fecha: new Date().toLocaleDateString('es-ES', { day: 'numeric', month: 'short' }),
         expiraEn,
       };
@@ -265,6 +299,14 @@ export default function App() {
     setNotas(notasActualizadas);
     guardarEnStorage(notasActualizadas);
     setModalVisible(false);
+  };
+
+  // Se llama cuando ModalUnirseNota termina de unirse y descargar la nota: se añade a la lista local
+  const notaUnida = (nota: Nota) => {
+    const notasActualizadas = [nota, ...notas];
+    setNotas(notasActualizadas);
+    guardarEnStorage(notasActualizadas);
+    setMostrarUnirse(false);
   };
 
   // 4. BORRAR UNA NOTA
@@ -296,10 +338,15 @@ export default function App() {
 
       {/* Cabecera */}
       <View style={styles.header}>
-        <Text style={styles.headerTitle}>Budgie Notes</Text>
-        <Text style={styles.headerSubtitle}>
-          {cargando ? 'Cargando...' : `${notas.length} notas guardadas`}
-        </Text>
+        <View style={{ flex: 1 }}>
+          <Text style={styles.headerTitle}>Budgie Notes</Text>
+          <Text style={styles.headerSubtitle}>
+            {cargando ? 'Cargando...' : `${notas.length} notas guardadas`}
+          </Text>
+        </View>
+        <TouchableOpacity style={styles.botonUnirse} onPress={() => setMostrarUnirse(true)}>
+          <Feather name="user-plus" size={20} color="#888" />
+        </TouchableOpacity>
       </View>
 
       {/* Grid de Tarjetas */}
@@ -323,7 +370,14 @@ export default function App() {
             style={styles.card}
             activeOpacity={0.7}
             onPress={() => abrirEditor(item)}
+            disabled={cargandoNotaId === item.id}
           >
+            {cargandoNotaId === item.id && (
+              <View style={styles.cardCargando}>
+                <ActivityIndicator color="#ff6b00" />
+              </View>
+            )}
+
             <View style={styles.cardHeader}>
               <Text style={styles.cardTitle} numberOfLines={2}>
                 {item.titulo}
@@ -372,6 +426,12 @@ export default function App() {
         onSave={guardarNota}
         onDelete={borrarNota}
       />
+
+      <ModalUnirseNota
+        visible={mostrarUnirse}
+        onClose={() => setMostrarUnirse(false)}
+        onUnido={notaUnida}
+      />
     </SafeAreaView>
   );
 }
@@ -393,6 +453,8 @@ function ModalEditorNota({
     expiraEn?: number;
     pinAcceso?: string;
     salCifrado?: string;
+    notaCompartidaId?: string;
+    esCreador?: boolean;
   }) => void;
   onDelete: () => void;
 }) {
@@ -400,9 +462,12 @@ function ModalEditorNota({
   const [esCompartidaInput, setEsCompartidaInput] = useState(nota?.esCompartida ?? false);
   const [pinInput, setPinInput] = useState(nota?.pinAcceso);
   const [salInput, setSalInput] = useState(nota?.salCifrado);
+  const [nombreCreadorInput, setNombreCreadorInput] = useState('');
   const [pinCopiado, setPinCopiado] = useState(false);
   const [expiraEnInput, setExpiraEnInput] = useState<number | undefined>(nota?.expiraEn);
   const [mostrarOpcionesCaducidad, setMostrarOpcionesCaducidad] = useState(false);
+  const [mostrarParticipantes, setMostrarParticipantes] = useState(false);
+  const [guardando, setGuardando] = useState(false);
 
   const editor = useEditorBridge({
     initialContent: nota?.contenido || '',
@@ -472,14 +537,47 @@ function ModalEditorNota({
 
   const guardar = async () => {
     const contenido = await editor.getHTML();
-    onSave({
-      titulo: tituloInput,
-      contenido,
-      esCompartida: esCompartidaInput,
-      expiraEn: expiraEnInput,
-      pinAcceso: pinInput,
-      salCifrado: salInput,
-    });
+
+    if (!esCompartidaInput || !pinInput || !salInput) {
+      onSave({ titulo: tituloInput, contenido, esCompartida: esCompartidaInput, expiraEn: expiraEnInput });
+      return;
+    }
+
+    setGuardando(true);
+    try {
+      const clave = await derivarClaveDesdePin(pinInput, salInput);
+      let notaCompartidaId = nota?.notaCompartidaId;
+      let esCreador = nota?.esCreador ?? true;
+
+      if (notaCompartidaId) {
+        await guardarNotaCompartida({ notaId: notaCompartidaId, titulo: tituloInput, contenidoHtml: contenido, clave });
+      } else {
+        notaCompartidaId = await crearNotaCompartida({
+          pin: pinInput,
+          salCifrado: salInput,
+          titulo: tituloInput,
+          contenidoHtml: contenido,
+          nombreCreador: nombreCreadorInput.trim() || 'Yo',
+        });
+        esCreador = true;
+      }
+
+      onSave({
+        titulo: tituloInput,
+        contenido,
+        esCompartida: true,
+        expiraEn: expiraEnInput,
+        pinAcceso: pinInput,
+        salCifrado: salInput,
+        notaCompartidaId,
+        esCreador,
+      });
+    } catch (error) {
+      console.error('Error al guardar la nota compartida en Supabase:', error);
+      Alert.alert('Error al guardar', mensajeDeError(error, 'No se ha podido guardar en la nube.'));
+    } finally {
+      setGuardando(false);
+    }
   };
 
   return (
@@ -508,13 +606,22 @@ function ModalEditorNota({
           </TouchableOpacity>
 
           <View style={styles.modalAccionesDerecha}>
+            {esCompartidaInput && nota?.esCreador && nota?.notaCompartidaId && (
+              <TouchableOpacity onPress={() => setMostrarParticipantes(true)} style={styles.botonBorrar}>
+                <Feather name="users" size={20} color="#888" />
+              </TouchableOpacity>
+            )}
             {nota && (
               <TouchableOpacity onPress={onDelete} style={styles.botonBorrar}>
                 <Feather name="trash-2" size={20} color="#ff4444" />
               </TouchableOpacity>
             )}
-            <TouchableOpacity onPress={guardar}>
-              <Text style={styles.modalBotonGuardar}>Guardar</Text>
+            <TouchableOpacity onPress={guardando ? undefined : guardar} disabled={guardando}>
+              {guardando ? (
+                <ActivityIndicator color="#ff6b00" />
+              ) : (
+                <Text style={styles.modalBotonGuardar}>Guardar</Text>
+              )}
             </TouchableOpacity>
           </View>
         </View>
@@ -543,6 +650,17 @@ function ModalEditorNota({
               </Text>
             </View>
           </TouchableOpacity>
+        )}
+
+        {/* Nombre del creador: solo hace falta la primera vez que se comparte (aún no existe en Supabase) */}
+        {esCompartidaInput && !nota?.notaCompartidaId && (
+          <TextInput
+            style={styles.inputNombreCreador}
+            placeholder="Tu nombre (se lo verán los demás)"
+            placeholderTextColor="#444"
+            value={nombreCreadorInput}
+            onChangeText={setNombreCreadorInput}
+          />
         )}
 
         {/* Banner de autodestrucción */}
@@ -657,13 +775,35 @@ function ModalEditorNota({
         </KeyboardAvoidingView>
 
       </SafeAreaView>
+
+      <ModalParticipantes
+        visible={mostrarParticipantes}
+        notaCompartidaId={nota?.notaCompartidaId ?? null}
+        onClose={() => setMostrarParticipantes(false)}
+      />
     </Modal>
   );
 }
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#0f0f0f' },
-  header: { paddingHorizontal: 20, paddingTop: 40, paddingBottom: 10 },
+  header: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 20,
+    paddingTop: 40,
+    paddingBottom: 10,
+  },
+  botonUnirse: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    backgroundColor: '#181818',
+    borderWidth: 1,
+    borderColor: '#222',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
   headerTitle: { fontSize: 30, fontWeight: '700', color: '#ffffff', letterSpacing: -0.5 },
   headerSubtitle: { fontSize: 13, color: '#555555', marginTop: 2 },
   listContent: { paddingHorizontal: 12, paddingBottom: 90 },
@@ -681,6 +821,14 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     borderWidth: 1,
     borderColor: '#222222',
+  },
+  cardCargando: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: '#181818ee',
+    borderRadius: 12,
+    justifyContent: 'center',
+    alignItems: 'center',
+    zIndex: 1,
   },
   cardHeader: { marginBottom: 6 },
   cardTitle: { fontSize: 15, fontWeight: '600', color: '#ececec', lineHeight: 20 },
@@ -758,6 +906,19 @@ const styles = StyleSheet.create({
   opcionTexto: { fontSize: 15, color: '#ccc' },
   opcionTextoQuitar: { color: '#ff4444' },
   opcionTextoCancelar: { color: '#888' },
+
+  inputNombreCreador: {
+    backgroundColor: '#181818',
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#222',
+    marginTop: 12,
+    marginHorizontal: 20,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    color: '#fff',
+    fontSize: 13,
+  },
 
   editorBody: { flex: 1, marginTop: 15, paddingHorizontal: 20 },
   inputTitulo: { fontSize: 22, fontWeight: '700', color: '#fff', marginBottom: 15 },

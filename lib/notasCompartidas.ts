@@ -1,7 +1,7 @@
 import * as Crypto from 'expo-crypto';
 import { asegurarSesionAnonima } from './auth';
 import { cifrarContenidoNota, descifrarContenidoNota } from './contenidoCompartido';
-import { derivarClaveDesdePin } from './cifrado';
+import { cifrarTexto, derivarClaveDesdePin, descifrarTexto } from './cifrado';
 import { supabase } from './supabase';
 
 const requerirSupabase = () => {
@@ -30,13 +30,15 @@ export interface Participante {
 export const crearNotaCompartida = async (datos: {
   pin: string;
   salCifrado: string;
+  titulo: string;
   contenidoHtml: string;
   nombreCreador: string;
   expiraEn?: number;
 }): Promise<string> => {
   const cliente = requerirSupabase();
   const usuarioId = await asegurarSesionAnonima();
-  const clave = derivarClaveDesdePin(datos.pin, datos.salCifrado);
+  const clave = await derivarClaveDesdePin(datos.pin, datos.salCifrado);
+  const tituloCifrado = cifrarTexto(clave, datos.titulo);
   const contenidoCifrado = await cifrarContenidoNota(datos.contenidoHtml, clave);
 
   const { data: nota, error: errorNota } = await cliente
@@ -45,6 +47,7 @@ export const crearNotaCompartida = async (datos: {
       creador_id: usuarioId,
       pin_hash: await hashPin(datos.pin),
       sal_cifrado: datos.salCifrado,
+      titulo_cifrado: tituloCifrado,
       contenido_cifrado: contenidoCifrado,
       expira_en: datos.expiraEn ? new Date(datos.expiraEn).toISOString() : null,
     })
@@ -70,7 +73,7 @@ export const crearNotaCompartida = async (datos: {
 export const unirseANotaPorPin = async (
   pin: string,
   nombreUsuario: string
-): Promise<{ notaId: string; clave: Uint8Array }> => {
+): Promise<{ notaId: string; salCifrado: string; clave: Uint8Array }> => {
   const cliente = requerirSupabase();
   const usuarioId = await asegurarSesionAnonima();
 
@@ -98,7 +101,11 @@ export const unirseANotaPorPin = async (
     if (errorParticipante) throw errorParticipante;
   }
 
-  return { notaId: encontrada.id as string, clave: derivarClaveDesdePin(pin, encontrada.sal_cifrado as string) };
+  return {
+    notaId: encontrada.id as string,
+    salCifrado: encontrada.sal_cifrado as string,
+    clave: await derivarClaveDesdePin(pin, encontrada.sal_cifrado as string),
+  };
 };
 
 // Descarga y descifra el contenido actual de una nota compartida (por su id de Supabase, no el
@@ -106,16 +113,17 @@ export const unirseANotaPorPin = async (
 export const cargarNotaCompartida = async (
   notaId: string,
   clave: Uint8Array
-): Promise<{ contenidoHtml: string; editadoPor: string | null; editadoEn: string | null }> => {
+): Promise<{ titulo: string; contenidoHtml: string; editadoPor: string | null; editadoEn: string | null }> => {
   const cliente = requerirSupabase();
   const { data: nota, error } = await cliente
     .from('notas_compartidas')
-    .select('contenido_cifrado, editado_por, editado_en')
+    .select('titulo_cifrado, contenido_cifrado, editado_por, editado_en')
     .eq('id', notaId)
     .single();
 
   if (error) throw error;
 
+  const titulo = descifrarTexto(clave, nota.titulo_cifrado as string);
   const contenidoHtml = await descifrarContenidoNota(nota.contenido_cifrado as string, clave);
 
   // editado_por es un auth.uid(); su nombre_usuario para ESTA nota vive en participantes_nota
@@ -131,29 +139,39 @@ export const cargarNotaCompartida = async (
     nombreEditor = participante?.nombre_usuario ?? null;
   }
 
-  return { contenidoHtml, editadoPor: nombreEditor, editadoEn: nota.editado_en as string | null };
+  return { titulo, contenidoHtml, editadoPor: nombreEditor, editadoEn: nota.editado_en as string | null };
 };
 
-// Sube (sobrescribe) el contenido cifrado y anota quién hizo el cambio y cuándo.
+// Sube (sobrescribe) el título y el contenido cifrados, y anota quién hizo el cambio y cuándo.
 export const guardarNotaCompartida = async (datos: {
   notaId: string;
+  titulo: string;
   contenidoHtml: string;
   clave: Uint8Array;
 }): Promise<void> => {
   const cliente = requerirSupabase();
   const usuarioId = await asegurarSesionAnonima();
+  const tituloCifrado = cifrarTexto(datos.clave, datos.titulo);
   const contenidoCifrado = await cifrarContenidoNota(datos.contenidoHtml, datos.clave);
 
-  const { error } = await cliente
+  // Si RLS bloquea la escritura (no eres el creador ni tienes puede_escribir), Supabase no lanza un
+  // error: simplemente no actualiza ninguna fila. Por eso pedimos de vuelta el id actualizado y
+  // comprobamos que de verdad haya una fila, en vez de asumir éxito por no haber `error`.
+  const { data, error } = await cliente
     .from('notas_compartidas')
     .update({
+      titulo_cifrado: tituloCifrado,
       contenido_cifrado: contenidoCifrado,
       editado_por: usuarioId,
       editado_en: new Date().toISOString(),
     })
-    .eq('id', datos.notaId);
+    .eq('id', datos.notaId)
+    .select('id');
 
   if (error) throw error;
+  if (!data || data.length === 0) {
+    throw new Error('No tienes permiso de escritura en esta nota.');
+  }
 };
 
 export const listarParticipantes = async (notaId: string): Promise<Participante[]> => {

@@ -70,14 +70,21 @@ const base64ABytes = (base64: string): Uint8Array => new Uint8Array(base64ABytes
 // lento al abrir una nota compartida, subirlo si hay margen.
 const ITERACIONES_KDF = 20_000;
 
+// Cada cuántas vueltas del hash se le cede el control al hilo de JS un instante (setTimeout 0),
+// para que la interfaz no se quede congelada mientras se calculan las 20.000 iteraciones.
+const LOTE_KDF = 500;
+
 // Deriva la clave simétrica (32 bytes) de una nota compartida a partir de su PIN. `sal` es el
 // `salCifrado` de la nota (aleatorio, generado una vez al crearla, no es secreto). Todo el que conoce
 // el PIN puede repetir este cálculo localmente sin que Supabase intervenga en ningún momento.
-export const derivarClaveDesdePin = (pin: string, salBase64: string): Uint8Array => {
+export const derivarClaveDesdePin = async (pin: string, salBase64: string): Promise<Uint8Array> => {
   const sal = base64ABytes(salBase64);
   let hash = nacl.hash(concatBytes(utf8Codificar(pin), sal));
   for (let i = 1; i < ITERACIONES_KDF; i++) {
     hash = nacl.hash(concatBytes(hash, sal));
+    if (i % LOTE_KDF === 0) {
+      await new Promise(resolve => setTimeout(resolve, 0));
+    }
   }
   return hash.slice(0, nacl.secretbox.keyLength);
 };
