@@ -146,6 +146,8 @@ const JS_MANTENER_CURSOR_EN_TAREAS = `
   })();
 `;
 
+type Filtro = 'todas' | 'compartidas' | 'locales' | 'autodestructivas';
+
 export default function App() {
   const [notas, setNotas] = useState<Nota[]>([]);
   const [cargando, setCargando] = useState(true);
@@ -156,6 +158,30 @@ export default function App() {
   const [editorSession, setEditorSession] = useState(0);
   const [mostrarUnirse, setMostrarUnirse] = useState(false);
   const [cargandoNotaId, setCargandoNotaId] = useState<string | null>(null);
+
+  // Barra inferior: filtro de tipo de nota + búsqueda por título
+  const [filtro, setFiltro] = useState<Filtro>('todas');
+  const [busquedaActiva, setBusquedaActiva] = useState(false);
+  const [busqueda, setBusqueda] = useState('');
+
+  const alternarFiltro = (nuevo: Filtro) => {
+    setFiltro(prev => (prev === nuevo ? 'todas' : nuevo));
+  };
+
+  const alternarBusqueda = () => {
+    setBusquedaActiva(prev => {
+      if (prev) setBusqueda('');
+      return !prev;
+    });
+  };
+
+  const notasVisibles = notas.filter(n => {
+    if (filtro === 'compartidas' && !n.esCompartida) return false;
+    if (filtro === 'locales' && n.esCompartida) return false;
+    if (filtro === 'autodestructivas' && n.expiraEn === undefined) return false;
+    if (busqueda.trim() && !n.titulo.toLowerCase().includes(busqueda.trim().toLowerCase())) return false;
+    return true;
+  });
 
   // 1. CARGAR NOTAS DEL MÓVIL AL ABRIR LA APP
   useEffect(() => {
@@ -361,7 +387,7 @@ export default function App() {
         <View style={{ flex: 1 }}>
           <Text style={styles.headerTitle}>Budgie Notes</Text>
           <Text style={styles.headerSubtitle}>
-            {cargando ? 'Cargando...' : `${notas.length} notas guardadas`}
+            {cargando ? 'Cargando...' : `${notasVisibles.length} notas guardadas`}
           </Text>
         </View>
         <TouchableOpacity style={styles.botonUnirse} onPress={() => setMostrarUnirse(true)}>
@@ -369,9 +395,29 @@ export default function App() {
         </TouchableOpacity>
       </View>
 
+      {/* Búsqueda por título (se abre desde la lupa de la barra inferior) */}
+      {busquedaActiva && (
+        <View style={styles.busquedaFila}>
+          <Feather name="search" size={16} color="#666" style={{ marginRight: 8 }} />
+          <TextInput
+            style={styles.busquedaInput}
+            placeholder="Buscar por título..."
+            placeholderTextColor="#444"
+            value={busqueda}
+            onChangeText={setBusqueda}
+            autoFocus
+          />
+          {busqueda.length > 0 && (
+            <TouchableOpacity onPress={() => setBusqueda('')}>
+              <Feather name="x" size={16} color="#666" />
+            </TouchableOpacity>
+          )}
+        </View>
+      )}
+
       {/* Grid de Tarjetas */}
       <FlatList
-        data={notas}
+        data={notasVisibles}
         keyExtractor={(item) => item.id}
         numColumns={2}
         columnWrapperStyle={styles.columnWrapper}
@@ -381,7 +427,9 @@ export default function App() {
           !cargando ? (
             <View style={styles.emptyContainer}>
               <Feather name="file-text" size={40} color="#333" />
-              <Text style={styles.emptyText}>No tienes notas guardadas.</Text>
+              <Text style={styles.emptyText}>
+                {notas.length === 0 ? 'No tienes notas guardadas.' : 'Ninguna nota coincide con este filtro.'}
+              </Text>
             </View>
           ) : null
         )}
@@ -436,6 +484,38 @@ export default function App() {
       <TouchableOpacity style={styles.fab} activeOpacity={0.8} onPress={abrirCreador}>
         <Feather name="plus" size={26} color="#ffffff" />
       </TouchableOpacity>
+
+      {/* Barra inferior: dos mitades de ancho EXACTAMENTE igual (flex:1 cada una), con los botones
+          empujados hacia el centro dentro de cada mitad — así el borde entre ambas cae siempre en
+          el 50% real de la barra, justo donde está la lupa (posición absoluta), sin importar cuántos
+          botones haya a cada lado ni cuánto ocupen. */}
+      <View style={styles.barraInferior}>
+        <View style={[styles.barraMitad, styles.barraMitadIzquierda]}>
+          <TouchableOpacity style={styles.barraBoton} onPress={() => alternarFiltro('compartidas')}>
+            <Feather name="share-2" size={20} color={filtro === 'compartidas' ? '#ff6b00' : '#888'} />
+            <Text style={[styles.barraTexto, filtro === 'compartidas' && styles.barraTextoActivo]}>Compartidas</Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity style={styles.barraBoton} onPress={() => alternarFiltro('locales')}>
+            <Feather name="lock" size={20} color={filtro === 'locales' ? '#ff6b00' : '#888'} />
+            <Text style={[styles.barraTexto, filtro === 'locales' && styles.barraTextoActivo]}>Locales</Text>
+          </TouchableOpacity>
+        </View>
+
+        <View style={[styles.barraMitad, styles.barraMitadDerecha]}>
+          <TouchableOpacity style={styles.barraBoton} onPress={() => alternarFiltro('autodestructivas')}>
+            <Feather name="clock" size={20} color={filtro === 'autodestructivas' ? '#ff6b00' : '#888'} />
+            <Text style={[styles.barraTexto, filtro === 'autodestructivas' && styles.barraTextoActivo]}>Temporales</Text>
+          </TouchableOpacity>
+        </View>
+
+        <TouchableOpacity
+          style={[styles.barraBotonCentro, busquedaActiva && styles.barraBotonCentroActivo]}
+          onPress={alternarBusqueda}
+        >
+          <Feather name="search" size={22} color={busquedaActiva ? '#0f0f0f' : '#fff'} />
+        </TouchableOpacity>
+      </View>
 
       {/* MODAL / EDITOR DE NOTAS */}
       <ModalEditorNota
@@ -873,7 +953,22 @@ const styles = StyleSheet.create({
   },
   headerTitle: { fontSize: 30, fontWeight: '700', color: '#ffffff', letterSpacing: -0.5 },
   headerSubtitle: { fontSize: 13, color: '#555555', marginTop: 2 },
-  listContent: { paddingHorizontal: 12, paddingBottom: 90 },
+
+  busquedaFila: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#181818',
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#222',
+    marginHorizontal: 20,
+    marginBottom: 12,
+    paddingHorizontal: 12,
+    paddingVertical: 9,
+  },
+  busquedaInput: { flex: 1, color: '#fff', fontSize: 14 },
+
+  listContent: { paddingHorizontal: 12, paddingBottom: 160 },
   columnWrapper: { justifyContent: 'space-between' },
   emptyContainer: { alignItems: 'center', justifyContent: 'center', marginTop: 60 },
   emptyText: { color: '#444', fontSize: 14, marginTop: 10 },
@@ -913,7 +1008,7 @@ const styles = StyleSheet.create({
   fab: {
     position: 'absolute',
     right: 20,
-    bottom: 30,
+    bottom: 95,
     backgroundColor: '#ff6b00',
     width: 52,
     height: 52,
@@ -921,6 +1016,44 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
     elevation: 5,
+  },
+
+  barraInferior: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#181818',
+    borderTopWidth: 1,
+    borderTopColor: '#222',
+    paddingHorizontal: 22,
+    paddingTop: 10,
+    paddingBottom: 12,
+  },
+  // Dos mitades de ancho EXACTAMENTE igual (flex:1 cada una): el borde entre ellas cae siempre en
+  // el 50% real de la barra, sin importar cuántos botones tenga cada lado. Dentro de cada mitad, los
+  // botones se empujan hacia ese borde (hacia el centro), para quedar pegados a la lupa.
+  barraMitad: { flex: 1, flexDirection: 'row' },
+  barraMitadIzquierda: { justifyContent: 'flex-end', paddingRight: 34 },
+  barraMitadDerecha: { justifyContent: 'flex-start', paddingLeft: 44 },
+  barraBoton: { alignItems: 'center', justifyContent: 'center', width: 66 },
+  barraTexto: { fontSize: 10, color: '#888', marginTop: 3, fontWeight: '500' },
+  barraTextoActivo: { color: '#ff6b00' },
+  barraBotonCentro: {
+    position: 'absolute',
+    left: '50%',
+    marginLeft: -0,
+    top: 2,
+    width: 46,
+    height: 46,
+    borderRadius: 23,
+    backgroundColor: '#0f0f0f',
+    borderWidth: 1,
+    borderColor: '#333',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  barraBotonCentroActivo: {
+    backgroundColor: '#ff6b00',
+    borderColor: '#ff6b00',
   },
 
   modalContainer: { flex: 1, backgroundColor: '#0f0f0f' },
