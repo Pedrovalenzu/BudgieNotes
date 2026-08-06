@@ -20,10 +20,12 @@ export default function ModalUnirseNota({
   visible,
   onClose,
   onUnido,
+  pinesUnidos,
 }: {
   visible: boolean;
   onClose: () => void;
   onUnido: (nota: Nota) => void;
+  pinesUnidos: string[];
 }) {
   const [pin, setPin] = useState('');
   const [nombre, setNombre] = useState('');
@@ -37,13 +39,21 @@ export default function ModalUnirseNota({
   };
 
   const unirse = async () => {
-    if (!pin.trim() || !nombre.trim()) {
+    const pinLimpio = pin.trim();
+
+    if (!pinLimpio || !nombre.trim()) {
       Alert.alert('Faltan datos', 'Introduce el PIN de la nota y tu nombre.');
       return;
     }
+
+    if (pinesUnidos.includes(pinLimpio)) {
+      Alert.alert('Ya estás en esta nota', 'Esta nota compartida ya está en tu lista.');
+      return;
+    }
+
     setCargando(true);
     try {
-      const { notaId, salCifrado, clave } = await unirseANotaPorPin(pin.trim(), nombre.trim());
+      const { notaId, salCifrado, clave } = await unirseANotaPorPin(pinLimpio, nombre.trim());
       const { titulo, contenidoHtml } = await cargarNotaCompartida(notaId, clave);
 
       onUnido({
@@ -51,7 +61,7 @@ export default function ModalUnirseNota({
         titulo,
         contenido: contenidoHtml,
         esCompartida: true,
-        pinAcceso: pin.trim(),
+        pinAcceso: pinLimpio,
         salCifrado,
         notaCompartidaId: notaId,
         esCreador: false,

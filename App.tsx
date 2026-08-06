@@ -24,7 +24,15 @@ import { generarPin } from './lib/pin';
 import { generarSalBase64, derivarClaveDesdePin } from './lib/cifrado';
 import { asegurarSesionAnonima } from './lib/auth';
 import { supabase } from './lib/supabase';
-import { cargarNotaCompartida, crearNotaCompartida, guardarNotaCompartida, unirseANotaPorPin } from './lib/notasCompartidas';
+import {
+  borrarNotaCompartidaDelServidor,
+  cargarNotaCompartida,
+  ConflictoEdicionError,
+  crearNotaCompartida,
+  guardarNotaCompartida,
+  salirDeNotaCompartida,
+  unirseANotaPorPin,
+} from './lib/notasCompartidas';
 import { mensajeDeError } from './lib/errores';
 import { Nota } from './types';
 import ModalUnirseNota from './components/ModalUnirseNota';
@@ -227,8 +235,8 @@ export default function App() {
     let notaParaAbrir = nota;
     try {
       const clave = await derivarClaveDesdePin(nota.pinAcceso, nota.salCifrado);
-      const { titulo, contenidoHtml } = await cargarNotaCompartida(nota.notaCompartidaId, clave);
-      notaParaAbrir = { ...nota, titulo, contenido: contenidoHtml };
+      const { titulo, contenidoHtml, editadoEn } = await cargarNotaCompartida(nota.notaCompartidaId, clave);
+      notaParaAbrir = { ...nota, titulo, contenido: contenidoHtml, ultimaEdicionConocida: editadoEn };
 
       const notasActualizadas = notas.map(n => (n.id === nota.id ? notaParaAbrir : n));
       setNotas(notasActualizadas);
@@ -321,7 +329,19 @@ export default function App() {
         {
           text: 'Borrar',
           style: 'destructive',
-          onPress: () => {
+          onPress: async () => {
+            if (notaSeleccionada.notaCompartidaId) {
+              try {
+                if (notaSeleccionada.esCreador) {
+                  await borrarNotaCompartidaDelServidor(notaSeleccionada.notaCompartidaId);
+                } else {
+                  await salirDeNotaCompartida(notaSeleccionada.notaCompartidaId);
+                }
+              } catch (error) {
+                console.error('Error al limpiar la nota compartida en Supabase:', error);
+              }
+            }
+
             const notasFiltradas = notas.filter(n => n.id !== notaSeleccionada.id);
             setNotas(notasFiltradas);
             guardarEnStorage(notasFiltradas);
@@ -431,6 +451,7 @@ export default function App() {
         visible={mostrarUnirse}
         onClose={() => setMostrarUnirse(false)}
         onUnido={notaUnida}
+        pinesUnidos={notas.filter(n => n.pinAcceso).map(n => n.pinAcceso as string)}
       />
     </SafeAreaView>
   );
@@ -535,10 +556,29 @@ function ModalEditorNota({
     // (cifrada) y sustituir este data URI por su URL cuando la nota se envíe a Supabase.
   };
 
-  const guardar = async () => {
+  const guardar = async (forzar: boolean = false) => {
     const contenido = await editor.getHTML();
 
     if (!esCompartidaInput || !pinInput || !salInput) {
+      // Se acaba de desactivar "Compartida" en una nota que sí llegó a existir en Supabase:
+      // salir/borrar en la nube antes de dejarla como solo local. Best-effort — si falla por no
+      // haber red, se desmarca igualmente en el dispositivo en vez de bloquear al usuario.
+      if (nota?.notaCompartidaId) {
+        try {
+          if (nota.esCreador) {
+            await borrarNotaCompartidaDelServidor(nota.notaCompartidaId);
+          } else {
+            await salirDeNotaCompartida(nota.notaCompartidaId);
+          }
+        } catch (error) {
+          console.error('Error al salir de la nota compartida en Supabase:', error);
+          Alert.alert(
+            'Aviso',
+            'No se ha podido avisar a la nube de que has dejado de compartir esta nota (puede que siga apareciendo para otros). Se ha desmarcado igualmente en este dispositivo.'
+          );
+        }
+      }
+
       onSave({ titulo: tituloInput, contenido, esCompartida: esCompartidaInput, expiraEn: expiraEnInput });
       return;
     }
@@ -550,7 +590,14 @@ function ModalEditorNota({
       let esCreador = nota?.esCreador ?? true;
 
       if (notaCompartidaId) {
-        await guardarNotaCompartida({ notaId: notaCompartidaId, titulo: tituloInput, contenidoHtml: contenido, clave });
+        await guardarNotaCompartida({
+          notaId: notaCompartidaId,
+          titulo: tituloInput,
+          contenidoHtml: contenido,
+          clave,
+          ultimaEdicionConocida: nota?.ultimaEdicionConocida ?? null,
+          forzar,
+        });
       } else {
         notaCompartidaId = await crearNotaCompartida({
           pin: pinInput,
@@ -573,6 +620,18 @@ function ModalEditorNota({
         esCreador,
       });
     } catch (error) {
+      if (error instanceof ConflictoEdicionError) {
+        Alert.alert(
+          'Alguien más ha editado esta nota',
+          `${error.editadoPor ?? 'Otra persona'} ha guardado cambios mientras la tenías abierta. ¿Qué quieres hacer?`,
+          [
+            { text: 'Seguir editando', style: 'cancel' },
+            { text: 'Descartar mis cambios', style: 'destructive', onPress: onClose },
+            { text: 'Sobrescribir con los míos', onPress: () => guardar(true) },
+          ]
+        );
+        return;
+      }
       console.error('Error al guardar la nota compartida en Supabase:', error);
       Alert.alert('Error al guardar', mensajeDeError(error, 'No se ha podido guardar en la nube.'));
     } finally {
@@ -616,7 +675,7 @@ function ModalEditorNota({
                 <Feather name="trash-2" size={20} color="#ff4444" />
               </TouchableOpacity>
             )}
-            <TouchableOpacity onPress={guardando ? undefined : guardar} disabled={guardando}>
+            <TouchableOpacity onPress={guardando ? undefined : () => guardar()} disabled={guardando}>
               {guardando ? (
                 <ActivityIndicator color="#ff6b00" />
               ) : (

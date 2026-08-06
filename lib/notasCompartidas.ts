@@ -24,6 +24,35 @@ export interface Participante {
   unidoEn: string;
 }
 
+// Alguien más guardó cambios en la nota entre que la abriste y que intentaste guardar tú.
+export class ConflictoEdicionError extends Error {
+  editadoPor: string | null;
+  editadoEn: string | null;
+  constructor(editadoPor: string | null, editadoEn: string | null) {
+    super('Alguien ha editado esta nota mientras la tenías abierta.');
+    this.name = 'ConflictoEdicionError';
+    this.editadoPor = editadoPor;
+    this.editadoEn = editadoEn;
+  }
+}
+
+// editado_por es un auth.uid(); su nombre_usuario para ESTA nota vive en participantes_nota
+// (no hay una relación declarada entre las dos tablas por esa columna, así que es una consulta aparte).
+const resolverNombreEditor = async (
+  cliente: NonNullable<typeof supabase>,
+  notaId: string,
+  usuarioId: string | null
+): Promise<string | null> => {
+  if (!usuarioId) return null;
+  const { data } = await cliente
+    .from('participantes_nota')
+    .select('nombre_usuario')
+    .eq('nota_id', notaId)
+    .eq('usuario_id', usuarioId)
+    .maybeSingle();
+  return data?.nombre_usuario ?? null;
+};
+
 // Crea una nota compartida nueva en Supabase: el creador queda registrado también como participante
 // (con permiso de escritura), para que "editado_por" se pueda resolver siempre igual sin importar
 // si el último en tocar la nota fue el creador o alguien que se unió después.
@@ -125,19 +154,7 @@ export const cargarNotaCompartida = async (
 
   const titulo = descifrarTexto(clave, nota.titulo_cifrado as string);
   const contenidoHtml = await descifrarContenidoNota(nota.contenido_cifrado as string, clave);
-
-  // editado_por es un auth.uid(); su nombre_usuario para ESTA nota vive en participantes_nota
-  // (no hay una relación declarada entre las dos tablas por esa columna, así que es una consulta aparte).
-  let nombreEditor: string | null = null;
-  if (nota.editado_por) {
-    const { data: participante } = await cliente
-      .from('participantes_nota')
-      .select('nombre_usuario')
-      .eq('nota_id', notaId)
-      .eq('usuario_id', nota.editado_por)
-      .maybeSingle();
-    nombreEditor = participante?.nombre_usuario ?? null;
-  }
+  const nombreEditor = await resolverNombreEditor(cliente, notaId, nota.editado_por as string | null);
 
   return { titulo, contenidoHtml, editadoPor: nombreEditor, editadoEn: nota.editado_en as string | null };
 };
@@ -148,16 +165,19 @@ export const guardarNotaCompartida = async (datos: {
   titulo: string;
   contenidoHtml: string;
   clave: Uint8Array;
+  // editado_en que se vio al abrir la nota (null si nunca se había editado). Si al guardar el
+  // valor actual en Supabase ya no coincide, alguien más guardó entre medias: no se sobrescribe
+  // en silencio, se lanza ConflictoEdicionError para que quien llama decida qué hacer.
+  ultimaEdicionConocida?: string | null;
+  // Ignora la comprobación anterior y sobrescribe de todas formas (elegido por el usuario tras un conflicto).
+  forzar?: boolean;
 }): Promise<void> => {
   const cliente = requerirSupabase();
   const usuarioId = await asegurarSesionAnonima();
   const tituloCifrado = cifrarTexto(datos.clave, datos.titulo);
   const contenidoCifrado = await cifrarContenidoNota(datos.contenidoHtml, datos.clave);
 
-  // Si RLS bloquea la escritura (no eres el creador ni tienes puede_escribir), Supabase no lanza un
-  // error: simplemente no actualiza ninguna fila. Por eso pedimos de vuelta el id actualizado y
-  // comprobamos que de verdad haya una fila, en vez de asumir éxito por no haber `error`.
-  const { data, error } = await cliente
+  let consulta = cliente
     .from('notas_compartidas')
     .update({
       titulo_cifrado: tituloCifrado,
@@ -165,13 +185,36 @@ export const guardarNotaCompartida = async (datos: {
       editado_por: usuarioId,
       editado_en: new Date().toISOString(),
     })
-    .eq('id', datos.notaId)
-    .select('id');
+    .eq('id', datos.notaId);
 
-  if (error) throw error;
-  if (!data || data.length === 0) {
-    throw new Error('No tienes permiso de escritura en esta nota.');
+  if (!datos.forzar) {
+    consulta = datos.ultimaEdicionConocida
+      ? consulta.eq('editado_en', datos.ultimaEdicionConocida)
+      : consulta.is('editado_en', null);
   }
+
+  // Si RLS bloquea la escritura, o si la condición de arriba no encaja (alguien guardó entre
+  // medias), Supabase no lanza un error: simplemente no actualiza ninguna fila. Por eso pedimos de
+  // vuelta el id actualizado y comprobamos que de verdad haya una fila, en vez de asumir éxito.
+  const { data, error } = await consulta.select('id');
+  if (error) throw error;
+  if (data && data.length > 0) return;
+
+  // 0 filas: miramos el estado actual para saber si fue un conflicto (alguien guardó antes que
+  // nosotros) o falta de permiso de escritura.
+  const { data: actual } = await cliente
+    .from('notas_compartidas')
+    .select('editado_por, editado_en')
+    .eq('id', datos.notaId)
+    .maybeSingle();
+
+  const huboConflicto = !datos.forzar && !!actual && actual.editado_en !== (datos.ultimaEdicionConocida ?? null);
+  if (huboConflicto) {
+    const nombreEditor = await resolverNombreEditor(cliente, datos.notaId, actual!.editado_por as string | null);
+    throw new ConflictoEdicionError(nombreEditor, actual!.editado_en as string | null);
+  }
+
+  throw new Error('No tienes permiso de escritura en esta nota.');
 };
 
 export const listarParticipantes = async (notaId: string): Promise<Participante[]> => {
@@ -214,5 +257,26 @@ export const cambiarPermisoEscritura = async (participanteId: string, puedeEscri
 export const revocarParticipante = async (participanteId: string): Promise<void> => {
   const cliente = requerirSupabase();
   const { error } = await cliente.from('participantes_nota').delete().eq('id', participanteId);
+  if (error) throw error;
+};
+
+// Un participante (no el creador) deja de estar en la nota: borra su propia fila. RLS ya permite
+// que cada uno borre la suya (usuario_id = auth.uid()), así que no hace falta saber el id de la fila.
+export const salirDeNotaCompartida = async (notaId: string): Promise<void> => {
+  const cliente = requerirSupabase();
+  const usuarioId = await asegurarSesionAnonima();
+  const { error } = await cliente
+    .from('participantes_nota')
+    .delete()
+    .eq('nota_id', notaId)
+    .eq('usuario_id', usuarioId);
+  if (error) throw error;
+};
+
+// El creador deja de compartir del todo: borra la nota de Supabase (participantes_nota se borra
+// en cascada), acabando la sincronización para todos los que estuvieran dentro.
+export const borrarNotaCompartidaDelServidor = async (notaId: string): Promise<void> => {
+  const cliente = requerirSupabase();
+  const { error } = await cliente.from('notas_compartidas').delete().eq('id', notaId);
   if (error) throw error;
 };
