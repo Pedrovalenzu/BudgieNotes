@@ -15,16 +15,22 @@ const reemplazarSrc = (etiqueta: string, nuevoSrc: string) => etiqueta.replace(/
  * Prepara el HTML de una nota compartida para enviarlo a Supabase: cada imagen embebida en base64
  * se cifra y se sube a Storage (dejando solo su URL en el HTML), y por último se cifra el HTML
  * entero (título, texto y esas URLs) como un único bloque. Nada de esto llega a Supabase en claro.
- *
- * Aún no está conectada a ningún guardado real (no existe todavía el envío de notas a Supabase),
- * pero queda lista para cuando exista.
  */
 export const cifrarContenidoNota = async (html: string, clave: Uint8Array): Promise<string> => {
-  let htmlConUrls = html;
+  const coincidencias = [...html.matchAll(REGEX_IMG_BASE64)];
 
-  for (const [etiquetaCompleta, , base64] of html.matchAll(REGEX_IMG_BASE64)) {
-    const bytesImagen = new Uint8Array(base64ABytesArrayBuffer(base64));
-    const url = await subirBytesCompartidos(cifrarBytes(clave, bytesImagen));
+  // Las imágenes se cifran y suben todas a la vez (no una detrás de otra) — con varias fotos en
+  // la nota, esto es la diferencia entre esperar la suma de todas las subidas o solo la más lenta.
+  const reemplazos = await Promise.all(
+    coincidencias.map(async ([etiquetaCompleta, , base64]) => {
+      const bytesImagen = new Uint8Array(base64ABytesArrayBuffer(base64));
+      const url = await subirBytesCompartidos(cifrarBytes(clave, bytesImagen));
+      return { etiquetaCompleta, url };
+    })
+  );
+
+  let htmlConUrls = html;
+  for (const { etiquetaCompleta, url } of reemplazos) {
     htmlConUrls = htmlConUrls.replace(etiquetaCompleta, reemplazarSrc(etiquetaCompleta, url));
   }
 
@@ -37,17 +43,23 @@ export const cifrarContenidoNota = async (html: string, clave: Uint8Array): Prom
  */
 export const descifrarContenidoNota = async (cifrado: string, clave: Uint8Array): Promise<string> => {
   const html = descifrarTexto(clave, cifrado);
+  const coincidencias = [...html.matchAll(REGEX_IMG_URL)].filter(([, url]) => esImagenDelBucketCompartido(url));
+
+  // Igual que al cifrar: todas las imágenes se descargan y descifran a la vez, no una por una.
+  const reemplazos = await Promise.all(
+    coincidencias.map(async ([etiquetaCompleta, url]) => {
+      const bytesCifrados = await descargarBytesCompartidos(url);
+      const bytesImagen = descifrarBytes(clave, bytesCifrados);
+      const base64 = bytesABase64Texto(
+        bytesImagen.buffer.slice(bytesImagen.byteOffset, bytesImagen.byteOffset + bytesImagen.byteLength) as ArrayBuffer
+      );
+      return { etiquetaCompleta, dataUri: `data:image/jpeg;base64,${base64}` };
+    })
+  );
+
   let resultado = html;
-
-  for (const [etiquetaCompleta, url] of html.matchAll(REGEX_IMG_URL)) {
-    if (!esImagenDelBucketCompartido(url)) continue;
-
-    const bytesCifrados = await descargarBytesCompartidos(url);
-    const bytesImagen = descifrarBytes(clave, bytesCifrados);
-    const base64 = bytesABase64Texto(
-      bytesImagen.buffer.slice(bytesImagen.byteOffset, bytesImagen.byteOffset + bytesImagen.byteLength) as ArrayBuffer
-    );
-    resultado = resultado.replace(etiquetaCompleta, reemplazarSrc(etiquetaCompleta, `data:image/jpeg;base64,${base64}`));
+  for (const { etiquetaCompleta, dataUri } of reemplazos) {
+    resultado = resultado.replace(etiquetaCompleta, reemplazarSrc(etiquetaCompleta, dataUri));
   }
 
   return resultado;

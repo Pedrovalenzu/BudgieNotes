@@ -71,13 +71,24 @@ const base64ABytes = (base64: string): Uint8Array => new Uint8Array(base64ABytes
 const ITERACIONES_KDF = 20_000;
 
 // Cada cuántas vueltas del hash se le cede el control al hilo de JS un instante (setTimeout 0),
-// para que la interfaz no se quede congelada mientras se calculan las 20.000 iteraciones.
-const LOTE_KDF = 500;
+// para que la interfaz no se quede congelada mientras se calculan las 20.000 iteraciones. Un
+// número más alto tarda menos en total (menos "respiros"), a cambio de congelar la interfaz un
+// poquito más entre uno y otro — 2.000 sigue siendo imperceptible pero cuesta 4 veces menos "ceder".
+const LOTE_KDF = 2_000;
+
+// Misma nota compartida abierta varias veces en la misma sesión de la app (reabrir, guardar y
+// volver a abrir...): no tiene sentido repetir las 20.000 iteraciones cada vez si el PIN y la sal
+// no han cambiado. Solo vive en memoria, se pierde al cerrar la app — no es una caché en disco.
+const cacheClaves = new Map<string, Uint8Array>();
 
 // Deriva la clave simétrica (32 bytes) de una nota compartida a partir de su PIN. `sal` es el
 // `salCifrado` de la nota (aleatorio, generado una vez al crearla, no es secreto). Todo el que conoce
 // el PIN puede repetir este cálculo localmente sin que Supabase intervenga en ningún momento.
 export const derivarClaveDesdePin = async (pin: string, salBase64: string): Promise<Uint8Array> => {
+  const claveCache = `${pin}:${salBase64}`;
+  const claveExistente = cacheClaves.get(claveCache);
+  if (claveExistente) return claveExistente;
+
   const sal = base64ABytes(salBase64);
   let hash = nacl.hash(concatBytes(utf8Codificar(pin), sal));
   for (let i = 1; i < ITERACIONES_KDF; i++) {
@@ -86,7 +97,9 @@ export const derivarClaveDesdePin = async (pin: string, salBase64: string): Prom
       await new Promise(resolve => setTimeout(resolve, 0));
     }
   }
-  return hash.slice(0, nacl.secretbox.keyLength);
+  const clave = hash.slice(0, nacl.secretbox.keyLength);
+  cacheClaves.set(claveCache, clave);
+  return clave;
 };
 
 export const generarSalBase64 = async (): Promise<string> => {

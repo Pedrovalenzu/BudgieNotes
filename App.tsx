@@ -665,6 +665,9 @@ function ModalEditorNota({
           </TouchableOpacity>
 
           <View style={styles.modalAccionesDerecha}>
+            <TouchableOpacity onPress={() => setMostrarOpcionesCaducidad(true)} style={styles.botonBorrar}>
+              <Feather name="clock" size={20} color={expiraEnInput !== undefined ? '#ff6b00' : '#888'} />
+            </TouchableOpacity>
             {esCompartidaInput && nota?.esCreador && nota?.notaCompartidaId && (
               <TouchableOpacity onPress={() => setMostrarParticipantes(true)} style={styles.botonBorrar}>
                 <Feather name="users" size={20} color="#888" />
@@ -722,23 +725,6 @@ function ModalEditorNota({
           />
         )}
 
-        {/* Banner de autodestrucción */}
-        <TouchableOpacity
-          style={styles.pinBanner}
-          activeOpacity={0.7}
-          onPress={() => setMostrarOpcionesCaducidad(true)}
-        >
-          <View style={styles.pinInfo}>
-            <Feather name="clock" size={14} color={expiraEnInput !== undefined ? '#ff6b00' : '#888'} style={{ marginRight: 8 }} />
-            <Text style={styles.pinText}>
-              {expiraEnInput !== undefined
-                ? <>Se borra el <Text style={styles.pinCodigo}>{formatoFechaHora(expiraEnInput)}</Text></>
-                : 'Sin caducidad'}
-            </Text>
-          </View>
-          <Feather name="chevron-right" size={16} color="#888" />
-        </TouchableOpacity>
-
         {/* Panel de opciones de caducidad (Alert.alert no soporta más de 3 botones en Android) */}
         <Modal
           visible={mostrarOpcionesCaducidad}
@@ -753,7 +739,11 @@ function ModalEditorNota({
           >
             <TouchableOpacity style={styles.opcionesTarjeta} activeOpacity={1} onPress={() => {}}>
               <Text style={styles.opcionesTitulo}>Autodestrucción</Text>
-              <Text style={styles.opcionesSubtitulo}>Pasado ese tiempo la nota se borrará automáticamente.</Text>
+              <Text style={styles.opcionesSubtitulo}>
+                {expiraEnInput !== undefined
+                  ? `Se borra el ${formatoFechaHora(expiraEnInput)}.`
+                  : 'Pasado ese tiempo la nota se borrará automáticamente.'}
+              </Text>
 
               {OPCIONES_CADUCIDAD.map(o => (
                 <TouchableOpacity key={o.horas} style={styles.opcionFila} onPress={() => elegirDuracion(o.horas)}>
@@ -829,6 +819,24 @@ function ModalEditorNota({
 
             <TouchableOpacity style={styles.toolbarBtn} onPress={() => editor.toggleCode()}>
               <Feather name="code" size={20} color={editorState.isCodeActive ? '#ff6b00' : '#888'} />
+            </TouchableOpacity>
+
+            <View style={styles.toolbarDivider} />
+
+            <TouchableOpacity
+              style={styles.toolbarBtn}
+              onPress={() => editor.undo()}
+              disabled={!editorState.canUndo}
+            >
+              <Feather name="corner-up-left" size={20} color={editorState.canUndo ? '#888' : '#444'} />
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={styles.toolbarBtn}
+              onPress={() => editor.redo()}
+              disabled={!editorState.canRedo}
+            >
+              <Feather name="corner-up-right" size={20} color={editorState.canRedo ? '#888' : '#444'} />
             </TouchableOpacity>
           </ScrollView>
         </KeyboardAvoidingView>
@@ -990,9 +998,9 @@ const styles = StyleSheet.create({
     borderTopColor: '#1a1a1a',
     backgroundColor: '#0f0f0f',
   },
-  toolbarContent: { paddingHorizontal: 19, alignItems: 'center', height: 54 },
-  toolbarBtn: { paddingVertical: 6, paddingHorizontal: 10, marginHorizontal: 1 },
+  toolbarContent: { paddingHorizontal: 5, alignItems: 'center', height: 54 },
+  toolbarBtn: { paddingVertical: 6, paddingHorizontal: 9, marginHorizontal: 1 },
   toolbarBtnText: { fontSize: 30, fontWeight: '700', color: '#888' },
   toolbarBtnTextActivo: { color: '#ff6b00' },
-  toolbarDivider: { width: 1, height: 20, backgroundColor: '#222', marginHorizontal: 4 },
+  toolbarDivider: { width: 0.8, height: 20, backgroundColor: '#222', marginHorizontal: 4 },
 });

@@ -142,7 +142,7 @@ export const unirseANotaPorPin = async (
 export const cargarNotaCompartida = async (
   notaId: string,
   clave: Uint8Array
-): Promise<{ titulo: string; contenidoHtml: string; editadoPor: string | null; editadoEn: string | null }> => {
+): Promise<{ titulo: string; contenidoHtml: string; editadoPorUid: string | null; editadoEn: string | null }> => {
   const cliente = requerirSupabase();
   const { data: nota, error } = await cliente
     .from('notas_compartidas')
@@ -154,9 +154,11 @@ export const cargarNotaCompartida = async (
 
   const titulo = descifrarTexto(clave, nota.titulo_cifrado as string);
   const contenidoHtml = await descifrarContenidoNota(nota.contenido_cifrado as string, clave);
-  const nombreEditor = await resolverNombreEditor(cliente, notaId, nota.editado_por as string | null);
 
-  return { titulo, contenidoHtml, editadoPor: nombreEditor, editadoEn: nota.editado_en as string | null };
+  // No se resuelve el nombre de quien editó aquí (sería otra consulta a Supabase en cada apertura
+  // de nota): nada en la interfaz lo muestra todavía. Si en el futuro hace falta, resolverNombreEditor
+  // sigue disponible para cuando exista esa pantalla, en vez de pagar el coste en cada apertura.
+  return { titulo, contenidoHtml, editadoPorUid: nota.editado_por as string | null, editadoEn: nota.editado_en as string | null };
 };
 
 // Sube (sobrescribe) el título y el contenido cifrados, y anota quién hizo el cambio y cuándo.
