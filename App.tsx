@@ -606,6 +606,7 @@ function ModalEditorNota({
   const [mostrarOpcionesCaducidad, setMostrarOpcionesCaducidad] = useState(false);
   const [mostrarParticipantes, setMostrarParticipantes] = useState(false);
   const [guardando, setGuardando] = useState(false);
+  const [conflicto, setConflicto] = useState<ConflictoEdicionError | null>(null);
 
   const editor = useEditorBridge({
     initialContent: nota?.contenido || '',
@@ -738,15 +739,7 @@ function ModalEditorNota({
       });
     } catch (error) {
       if (error instanceof ConflictoEdicionError) {
-        Alert.alert(
-          'Alguien más ha editado esta nota',
-          `${error.editadoPor ?? 'Otra persona'} ha guardado cambios mientras la tenías abierta. ¿Qué quieres hacer?`,
-          [
-            { text: 'Seguir editando', style: 'cancel' },
-            { text: 'Descartar mis cambios', style: 'destructive', onPress: onClose },
-            { text: 'Sobrescribir con los míos', onPress: () => guardar(true) },
-          ]
-        );
+        setConflicto(error);
         return;
       }
       console.error('Error al guardar la nota compartida en Supabase:', error);
@@ -876,6 +869,48 @@ function ModalEditorNota({
 
               <TouchableOpacity style={styles.opcionFila} onPress={() => setMostrarOpcionesCaducidad(false)}>
                 <Text style={[styles.opcionTexto, styles.opcionTextoCancelar]}>Cancelar</Text>
+              </TouchableOpacity>
+            </TouchableOpacity>
+          </TouchableOpacity>
+        </Modal>
+
+        {/* Panel de conflicto al guardar (Alert.alert es del sistema operativo, no se puede pintar
+            con los colores del tema — por eso este, igual que el de arriba, es propio) */}
+        <Modal
+          visible={!!conflicto}
+          transparent
+          animationType="fade"
+          onRequestClose={() => setConflicto(null)}
+        >
+          <TouchableOpacity style={styles.opcionesFondo} activeOpacity={1} onPress={() => setConflicto(null)}>
+            <TouchableOpacity style={styles.opcionesTarjeta} activeOpacity={1} onPress={() => {}}>
+              <Text style={styles.opcionesTitulo}>Alguien más ha editado esta nota</Text>
+              <Text style={styles.opcionesSubtitulo}>
+                {conflicto?.editadoPor ?? 'Otra persona'} ha guardado cambios mientras la tenías abierta. ¿Qué quieres hacer?
+              </Text>
+
+              <TouchableOpacity style={styles.opcionFila} onPress={() => setConflicto(null)}>
+                <Text style={[styles.opcionTexto, styles.opcionTextoCancelar]}>Seguir editando</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={styles.opcionFila}
+                onPress={() => {
+                  setConflicto(null);
+                  guardar(true);
+                }}
+              >
+                <Text style={[styles.opcionTexto, styles.opcionTextoDestacado]}>Sobrescribir con los míos</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={styles.opcionFila}
+                onPress={() => {
+                  setConflicto(null);
+                  onClose();
+                }}
+              >
+                <Text style={[styles.opcionTexto, styles.opcionTextoQuitar]}>Descartar mis cambios</Text>
               </TouchableOpacity>
             </TouchableOpacity>
           </TouchableOpacity>
@@ -1144,6 +1179,7 @@ const crearEstilos = (t: Tema) => StyleSheet.create({
   opcionTexto: { fontSize: 15, color: '#ccc' },
   opcionTextoQuitar: { color: '#ff4444' },
   opcionTextoCancelar: { color: t.textoIcono },
+  opcionTextoDestacado: { color: '#ff6b00', fontWeight: '600' },
 
   inputNombreCreador: {
     backgroundColor: t.superficie,
