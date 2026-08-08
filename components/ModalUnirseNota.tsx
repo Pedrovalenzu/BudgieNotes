@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -14,6 +14,8 @@ import {
 import { Feather } from '@expo/vector-icons';
 import { cargarNotaCompartida, unirseANotaPorPin } from '../lib/notasCompartidas';
 import { mensajeDeError } from '../lib/errores';
+import { useTema } from '../lib/TemaContext';
+import { Tema } from '../lib/tema';
 import { Nota } from '../types';
 
 export default function ModalUnirseNota({
@@ -27,6 +29,8 @@ export default function ModalUnirseNota({
   onUnido: (nota: Nota) => void;
   pinesUnidos: string[];
 }) {
+  const { tema } = useTema();
+  const styles = useMemo(() => crearEstilos(tema), [tema]);
   const [pin, setPin] = useState('');
   const [nombre, setNombre] = useState('');
   const [cargando, setCargando] = useState(false);
@@ -85,7 +89,7 @@ export default function ModalUnirseNota({
           <View style={styles.cabecera}>
             <Text style={styles.titulo}>Unirse a una nota</Text>
             <TouchableOpacity onPress={cerrar} disabled={cargando}>
-              <Feather name="x" size={22} color="#8890A3" />
+              <Feather name="x" size={22} color={tema.textoIcono} />
             </TouchableOpacity>
           </View>
 
@@ -93,7 +97,7 @@ export default function ModalUnirseNota({
           <TextInput
             style={styles.input}
             placeholder="X7K9-P2M4-Q8RT-3WYL"
-            placeholderTextColor="#444C5F"
+            placeholderTextColor={tema.textoTerciario}
             autoCapitalize="characters"
             autoCorrect={false}
             value={pin}
@@ -105,14 +109,14 @@ export default function ModalUnirseNota({
           <TextInput
             style={styles.input}
             placeholder="¿Cómo te llamas?"
-            placeholderTextColor="#444C5F"
+            placeholderTextColor={tema.textoTerciario}
             value={nombre}
             onChangeText={setNombre}
             editable={!cargando}
           />
 
           <TouchableOpacity style={styles.boton} onPress={unirse} disabled={cargando}>
-            {cargando ? <ActivityIndicator color="#0F172A" /> : <Text style={styles.botonTexto}>Unirse</Text>}
+            {cargando ? <ActivityIndicator color={tema.fondo} /> : <Text style={styles.botonTexto}>Unirse</Text>}
           </TouchableOpacity>
         </View>
       </KeyboardAvoidingView>
@@ -120,17 +124,17 @@ export default function ModalUnirseNota({
   );
 }
 
-const styles = StyleSheet.create({
+const crearEstilos = (t: Tema) => StyleSheet.create({
   fondo: { flex: 1, backgroundColor: 'rgba(0,0,0,0.6)', justifyContent: 'center', padding: 20 },
-  tarjeta: { backgroundColor: '#182033', borderRadius: 16, padding: 20, borderWidth: 1, borderColor: '#222A3D' },
+  tarjeta: { backgroundColor: t.superficie, borderRadius: 16, padding: 20, borderWidth: 1, borderColor: t.borde },
   cabecera: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 },
   titulo: { fontSize: 17, fontWeight: '700', color: '#fff' },
-  etiqueta: { fontSize: 12, color: '#8890A3', marginBottom: 6, marginTop: 14 },
+  etiqueta: { fontSize: 12, color: t.textoIcono, marginBottom: 6, marginTop: 14 },
   input: {
-    backgroundColor: '#0F172A',
+    backgroundColor: t.fondo,
     borderRadius: 8,
     borderWidth: 1,
-    borderColor: '#222A3D',
+    borderColor: t.borde,
     paddingHorizontal: 12,
     paddingVertical: 10,
     color: '#fff',
@@ -143,5 +147,5 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     marginTop: 20,
   },
-  botonTexto: { color: '#0F172A', fontWeight: '700', fontSize: 15 },
+  botonTexto: { color: t.fondo, fontWeight: '700', fontSize: 15 },
 });

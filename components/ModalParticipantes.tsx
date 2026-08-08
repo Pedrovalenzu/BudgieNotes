@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -13,6 +13,8 @@ import {
 import { Feather } from '@expo/vector-icons';
 import { cambiarPermisoEscritura, listarParticipantes, Participante, revocarParticipante } from '../lib/notasCompartidas';
 import { mensajeDeError } from '../lib/errores';
+import { useTema } from '../lib/TemaContext';
+import { Tema } from '../lib/tema';
 
 export default function ModalParticipantes({
   visible,
@@ -23,6 +25,8 @@ export default function ModalParticipantes({
   notaCompartidaId: string | null;
   onClose: () => void;
 }) {
+  const { tema } = useTema();
+  const styles = useMemo(() => crearEstilos(tema), [tema]);
   const [participantes, setParticipantes] = useState<Participante[]>([]);
   const [cargando, setCargando] = useState(false);
 
@@ -80,7 +84,7 @@ export default function ModalParticipantes({
           <View style={styles.cabecera}>
             <Text style={styles.titulo}>Quién tiene acceso</Text>
             <TouchableOpacity onPress={onClose}>
-              <Feather name="x" size={22} color="#8890A3" />
+              <Feather name="x" size={22} color={tema.textoIcono} />
             </TouchableOpacity>
           </View>
 
@@ -108,8 +112,8 @@ export default function ModalParticipantes({
                       <Switch
                         value={item.puedeEscribir}
                         onValueChange={valor => alternarEscritura(item, valor)}
-                        trackColor={{ false: '#333B4E', true: '#ff6b0088' }}
-                        thumbColor={item.puedeEscribir ? '#ff6b00' : '#8890A3'}
+                        trackColor={{ false: tema.bordeFuerte, true: '#ff6b0088' }}
+                        thumbColor={item.puedeEscribir ? '#ff6b00' : tema.textoIcono}
                       />
                       <TouchableOpacity onPress={() => expulsar(item)} style={styles.botonQuitar}>
                         <Feather name="user-x" size={18} color="#ff4444" />
@@ -126,28 +130,28 @@ export default function ModalParticipantes({
   );
 }
 
-const styles = StyleSheet.create({
+const crearEstilos = (t: Tema) => StyleSheet.create({
   fondo: { flex: 1, backgroundColor: 'rgba(0,0,0,0.6)', justifyContent: 'center', padding: 20 },
   tarjeta: {
-    backgroundColor: '#182033',
+    backgroundColor: t.superficie,
     borderRadius: 16,
     padding: 20,
     borderWidth: 1,
-    borderColor: '#222A3D',
+    borderColor: t.borde,
     maxHeight: '80%',
   },
   cabecera: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 },
   titulo: { fontSize: 17, fontWeight: '700', color: '#fff' },
   lista: { maxHeight: 320 },
-  vacio: { color: '#555D70', fontSize: 13, textAlign: 'center', paddingVertical: 20 },
+  vacio: { color: t.textoSecundario, fontSize: 13, textAlign: 'center', paddingVertical: 20 },
   fila: {
     flexDirection: 'row',
     alignItems: 'center',
     paddingVertical: 12,
     borderTopWidth: 1,
-    borderTopColor: '#222A3D',
+    borderTopColor: t.borde,
   },
   nombre: { color: '#ececec', fontSize: 15, fontWeight: '600' },
-  escritura: { color: '#777F92', fontSize: 12, marginTop: 2 },
+  escritura: { color: t.textoSecundarioAlt, fontSize: 12, marginTop: 2 },
   botonQuitar: { marginLeft: 12, padding: 4 },
 });

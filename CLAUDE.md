@@ -32,14 +32,10 @@ Estamos desarrollando una aplicación móvil de notas híbrida (locales + compar
 - **Utilidades activas:** `expo-clipboard` para copiar PINs de acceso.
 
 #### 2. Diseño e Interfaz (UI/UX):
-- **Estilo:** Tema oscuro minimalista con tinte azulado (marino), no negro puro. Acentos en naranja `#ff6b00` y verde código `#00ff88` sin cambios; el resto de la escala de grises se generó aplicando el mismo tinte de `#0F172A` (el fondo) a cada nivel de claridad que ya existía, para que todo el tema tenga un tono coherente:
-  - Fondo: `#0F172A`
-  - Tarjetas / superficies: `#182033`
-  - Bordes (nivel 1 / nivel 2): `#222A3D` / `#333B4E`
-  - Texto terciario / iconos apagados: `#444C5F`
-  - Texto secundario: `#555D70`, `#666E81`, `#777F92` (según contexto)
-  - Iconos y etiquetas por defecto: `#8890A3`
-  - Texto claro (títulos, contenido del editor): sin teñir — `#ccc`, `#ececec`, `#fff` se mantienen tal cual, un blanco/gris neutro se lee bien igualmente sobre el nuevo fondo y evita perder contraste.
+- **Estilo — dos temas, elegibles en caliente:** Acentos en naranja `#ff6b00` y verde código `#00ff88` iguales en ambos; solo cambia la escala de grises (fondo/superficie/bordes/texto), con el mismo esquema de "claridad" en los dos. Sistema en `lib/tema.ts` (los tokens: `fondo`, `superficie`, `borde`, `bordeFuerte`, `textoTerciario`, `textoSecundario`, `textoSecundarioAlt`, `textoIcono`) + `lib/TemaContext.tsx` (`TemaProvider`/`useTema()`, persiste la elección en `AsyncStorage`). `App.tsx` y los modales en `components/` no llevan colores sueltos: cada uno calcula sus estilos con `crearEstilos(tema)` (memoizado) en vez de un `StyleSheet.create` fijo; el CSS del editor (`crearCssEditor`) también depende del tema.
+  - **Navy (por defecto):** `#0F172A` fondo, `#182033` superficie, `#222A3D`/`#333B4E` bordes, `#444C5F`→`#8890A3` texto/iconos según nivel.
+  - **Oscuro (alternativa, negro puro — el tema original de la app):** `#0f0f0f` fondo, `#181818` superficie, `#222222`/`#333333` bordes, `#444444`→`#888888` texto/iconos. Se activa con el botón "Oscuro" (icono luna) en la barra inferior.
+  - Texto claro (títulos, contenido del editor) sin teñir en ningún tema: `#ccc`, `#ececec`, `#fff`.
 - **Pantalla Principal:** Grid/Masonry de 2 columnas estilo Xiaomi (MIUI/HyperOS Notes) que renderiza tarjetas con título, previsualización de contenido, fecha e indicador de tipo de nota (`Local` con candado / `PIN` compartida).
 - **Acciones:** Botón flotante (FAB) naranja para crear notas y Modal deslizante para editar/leer notas existentes con opción de borrado.
 

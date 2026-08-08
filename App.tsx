@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import {
   ActivityIndicator,
   StyleSheet,
@@ -35,6 +35,8 @@ import {
 } from './lib/notasCompartidas';
 import { mensajeDeError } from './lib/errores';
 import { Nota } from './types';
+import { Tema } from './lib/tema';
+import { TemaProvider, useTema } from './lib/TemaContext';
 import ModalUnirseNota from './components/ModalUnirseNota';
 import ModalParticipantes from './components/ModalParticipantes';
 
@@ -73,8 +75,8 @@ const OPCIONES_CADUCIDAD: { texto: string; horas: number }[] = [
   { texto: '7 días', horas: 168 },
 ];
 
-const CSS_EDITOR = `
-  html, body { background-color: #0F172A; margin: 0; }
+const crearCssEditor = (t: Tema) => `
+  html, body { background-color: ${t.fondo}; margin: 0; }
   .ProseMirror {
     color: #ccc !important;
     font-size: 15px;
@@ -88,30 +90,32 @@ const CSS_EDITOR = `
   .ProseMirror p { margin: 0 0 8px 0; }
   strong { color: #ff6b00 !important; }
   code {
-    background-color: #182033;
+    background-color: ${t.superficie};
     color: #00ff88 !important;
     padding: 2px 5px;
     border-radius: 4px;
     font-size: 0.85em;
   }
-  s { color: #666E81 !important; }
+  s { color: ${t.textoSecundarioAlt} !important; }
   img {
     border-radius: 10px;
     margin: 8px 0;
   }
   ul[data-type="taskList"] li > label > input {
-    border: 1px solid #555D70 !important;
-    background: #182033 !important;
+    border: 1px solid ${t.textoSecundario} !important;
+    background: ${t.superficie} !important;
     accent-color: #ff6b00;
   }
-  .is-editor-empty:first-child::before { color: #333B4E; }
+  .is-editor-empty:first-child::before { color: ${t.bordeFuerte}; }
 `;
 
-// Va en bridgeExtensions (no injectCSS) para que se aplique al cargar, sin el texto negro por defecto de por medio
-const BridgeTemaOscuro = new BridgeExtension({
-  forceName: 'temaOscuro',
-  extendCSS: CSS_EDITOR,
-});
+// Va en bridgeExtensions (no injectCSS) para que se aplique al cargar, sin el texto negro por defecto de por medio.
+// Se crea dentro de ModalEditorNota (no aquí, a nivel de módulo) porque necesita el tema actual.
+const crearBridgeTema = (t: Tema) =>
+  new BridgeExtension({
+    forceName: 'temaOscuro',
+    extendCSS: crearCssEditor(t),
+  });
 
 // El checkbox de tarea de Tiptap hace focus() internamente al marcar/desmarcar y a veces
 // la selección salta al final del documento. Guardamos el cursor justo antes del click
@@ -156,14 +160,18 @@ const ALTO_BASE_BARRA_INFERIOR = 57;
 // componente que lo declara — por eso el contenido real vive aparte, en PantallaPrincipal.
 export default function App() {
   return (
-    <SafeAreaProvider>
-      <PantallaPrincipal />
-    </SafeAreaProvider>
+    <TemaProvider>
+      <SafeAreaProvider>
+        <PantallaPrincipal />
+      </SafeAreaProvider>
+    </TemaProvider>
   );
 }
 
 function PantallaPrincipal() {
   const insets = useSafeAreaInsets();
+  const { tema, nombreTema, alternarTema } = useTema();
+  const styles = useMemo(() => crearEstilos(tema), [tema]);
   const [notas, setNotas] = useState<Nota[]>([]);
   const [cargando, setCargando] = useState(true);
 
@@ -395,7 +403,7 @@ function PantallaPrincipal() {
 
   return (
     <SafeAreaView style={styles.container} edges={['top', 'left', 'right']}>
-      <StatusBar barStyle="light-content" backgroundColor="#0F172A" />
+      <StatusBar barStyle="light-content" backgroundColor={tema.fondo} />
 
       {/* Cabecera */}
       <View style={styles.header}>
@@ -406,25 +414,32 @@ function PantallaPrincipal() {
           </Text>
         </View>
         <TouchableOpacity style={styles.botonUnirse} onPress={() => setMostrarUnirse(true)}>
-          <Feather name="user-plus" size={20} color="#8890A3" />
+          <Feather name="user-plus" size={20} color={tema.textoIcono} />
+        </TouchableOpacity>
+        <TouchableOpacity style={[styles.botonUnirse, styles.botonTema]} onPress={alternarTema}>
+          <Feather
+            name={nombreTema === 'oscuro' ? 'moon' : 'sun'}
+            size={20}
+            color={nombreTema === 'oscuro' ? '#ff6b00' : tema.textoIcono}
+          />
         </TouchableOpacity>
       </View>
 
       {/* Búsqueda por título (se abre desde la lupa de la barra inferior) */}
       {busquedaActiva && (
         <View style={styles.busquedaFila}>
-          <Feather name="search" size={16} color="#666E81" style={{ marginRight: 8 }} />
+          <Feather name="search" size={16} color={tema.textoSecundarioAlt} style={{ marginRight: 8 }} />
           <TextInput
             style={styles.busquedaInput}
             placeholder="Buscar por título..."
-            placeholderTextColor="#444C5F"
+            placeholderTextColor={tema.textoTerciario}
             value={busqueda}
             onChangeText={setBusqueda}
             autoFocus
           />
           {busqueda.length > 0 && (
             <TouchableOpacity onPress={() => setBusqueda('')}>
-              <Feather name="x" size={16} color="#666E81" />
+              <Feather name="x" size={16} color={tema.textoSecundarioAlt} />
             </TouchableOpacity>
           )}
         </View>
@@ -441,7 +456,7 @@ function PantallaPrincipal() {
         ListEmptyComponent={() => (
           !cargando ? (
             <View style={styles.emptyContainer}>
-              <Feather name="file-text" size={40} color="#333B4E" />
+              <Feather name="file-text" size={40} color={tema.bordeFuerte} />
               <Text style={styles.emptyText}>
                 {notas.length === 0 ? 'No tienes notas guardadas.' : 'Ninguna nota coincide con este filtro.'}
               </Text>
@@ -482,7 +497,7 @@ function PantallaPrincipal() {
                   <Feather
                     name={item.esCompartida ? "share-2" : "lock"}
                     size={10}
-                    color={item.esCompartida ? "#ff6b00" : "#8890A3"}
+                    color={item.esCompartida ? "#ff6b00" : tema.textoIcono}
                     style={{ marginRight: 4 }}
                   />
                   <Text style={[styles.badgeText, item.esCompartida && styles.badgeTextCompartida]}>
@@ -512,19 +527,19 @@ function PantallaPrincipal() {
       <View style={[styles.barraInferior, { paddingBottom: 12 + insets.bottom }]}>
         <View style={[styles.barraMitad, styles.barraMitadIzquierda]}>
           <TouchableOpacity style={styles.barraBoton} onPress={() => alternarFiltro('compartidas')}>
-            <Feather name="share-2" size={20} color={filtro === 'compartidas' ? '#ff6b00' : '#8890A3'} />
+            <Feather name="share-2" size={20} color={filtro === 'compartidas' ? '#ff6b00' : tema.textoIcono} />
             <Text style={[styles.barraTexto, filtro === 'compartidas' && styles.barraTextoActivo]}>Compartidas</Text>
           </TouchableOpacity>
 
           <TouchableOpacity style={styles.barraBoton} onPress={() => alternarFiltro('locales')}>
-            <Feather name="lock" size={20} color={filtro === 'locales' ? '#ff6b00' : '#8890A3'} />
+            <Feather name="lock" size={20} color={filtro === 'locales' ? '#ff6b00' : tema.textoIcono} />
             <Text style={[styles.barraTexto, filtro === 'locales' && styles.barraTextoActivo]}>Locales</Text>
           </TouchableOpacity>
         </View>
 
         <View style={[styles.barraMitad, styles.barraMitadDerecha]}>
           <TouchableOpacity style={styles.barraBoton} onPress={() => alternarFiltro('autodestructivas')}>
-            <Feather name="clock" size={20} color={filtro === 'autodestructivas' ? '#ff6b00' : '#8890A3'} />
+            <Feather name="clock" size={20} color={filtro === 'autodestructivas' ? '#ff6b00' : tema.textoIcono} />
             <Text style={[styles.barraTexto, filtro === 'autodestructivas' && styles.barraTextoActivo]}>Temporales</Text>
           </TouchableOpacity>
         </View>
@@ -533,7 +548,7 @@ function PantallaPrincipal() {
           style={[styles.barraBotonCentro, busquedaActiva && styles.barraBotonCentroActivo]}
           onPress={alternarBusqueda}
         >
-          <Feather name="search" size={22} color={busquedaActiva ? '#0F172A' : '#fff'} />
+          <Feather name="search" size={22} color={busquedaActiva ? tema.fondo : '#fff'} />
         </TouchableOpacity>
       </View>
 
@@ -579,6 +594,8 @@ function ModalEditorNota({
   }) => void;
   onDelete: () => void;
 }) {
+  const { tema } = useTema();
+  const styles = useMemo(() => crearEstilos(tema), [tema]);
   const [tituloInput, setTituloInput] = useState(nota?.titulo ?? '');
   const [esCompartidaInput, setEsCompartidaInput] = useState(nota?.esCompartida ?? false);
   const [pinInput, setPinInput] = useState(nota?.pinAcceso);
@@ -593,10 +610,10 @@ function ModalEditorNota({
   const editor = useEditorBridge({
     initialContent: nota?.contenido || '',
     avoidIosKeyboard: true,
-    theme: { webview: { backgroundColor: '#0F172A' } },
+    theme: { webview: { backgroundColor: tema.fondo } },
     bridgeExtensions: [
       ...TenTapStartKit,
-      BridgeTemaOscuro,
+      crearBridgeTema(tema),
       PlaceholderBridge.configureExtension({ placeholder: 'Escribe tu nota aquí...' }),
     ],
   });
@@ -746,7 +763,7 @@ function ModalEditorNota({
         {/* Barra superior */}
         <View style={styles.modalHeader}>
           <TouchableOpacity onPress={onClose} style={styles.botonIcono}>
-            <Feather name="arrow-left" size={22} color="#8890A3" />
+            <Feather name="arrow-left" size={22} color={tema.textoIcono} />
           </TouchableOpacity>
 
           <TouchableOpacity
@@ -756,7 +773,7 @@ function ModalEditorNota({
             <Feather
               name={esCompartidaInput ? "share-2" : "lock"}
               size={12}
-              color={esCompartidaInput ? "#ff6b00" : "#8890A3"}
+              color={esCompartidaInput ? "#ff6b00" : tema.textoIcono}
               style={{ marginRight: 6 }}
             />
             <Text style={[styles.badgeText, esCompartidaInput && styles.badgeTextCompartida]}>
@@ -766,11 +783,11 @@ function ModalEditorNota({
 
           <View style={styles.modalAccionesDerecha}>
             <TouchableOpacity onPress={() => setMostrarOpcionesCaducidad(true)} style={styles.botonBorrar}>
-              <Feather name="clock" size={20} color={expiraEnInput !== undefined ? '#ff6b00' : '#8890A3'} />
+              <Feather name="clock" size={20} color={expiraEnInput !== undefined ? '#ff6b00' : tema.textoIcono} />
             </TouchableOpacity>
             {esCompartidaInput && nota?.esCreador && nota?.notaCompartidaId && (
               <TouchableOpacity onPress={() => setMostrarParticipantes(true)} style={styles.botonBorrar}>
-                <Feather name="users" size={20} color="#8890A3" />
+                <Feather name="users" size={20} color={tema.textoIcono} />
               </TouchableOpacity>
             )}
             {nota && (
@@ -805,7 +822,7 @@ function ModalEditorNota({
               <Feather
                 name={pinCopiado ? "check" : "copy"}
                 size={14}
-                color={pinCopiado ? "#00ff88" : "#8890A3"}
+                color={pinCopiado ? "#00ff88" : tema.textoIcono}
               />
               <Text style={[styles.copiarTexto, pinCopiado && styles.copiarTextoExito]}>
                 {pinCopiado ? '¡Copiado!' : 'Copiar'}
@@ -819,7 +836,7 @@ function ModalEditorNota({
           <TextInput
             style={styles.inputNombreCreador}
             placeholder="Tu nombre (se lo verán los demás)"
-            placeholderTextColor="#444C5F"
+            placeholderTextColor={tema.textoTerciario}
             value={nombreCreadorInput}
             onChangeText={setNombreCreadorInput}
           />
@@ -873,7 +890,7 @@ function ModalEditorNota({
             <TextInput
               style={styles.inputTitulo}
               placeholder="Título"
-              placeholderTextColor="#444C5F"
+              placeholderTextColor={tema.textoTerciario}
               value={tituloInput}
               onChangeText={setTituloInput}
             />
@@ -890,17 +907,17 @@ function ModalEditorNota({
             keyboardShouldPersistTaps="always"
           >
             <TouchableOpacity style={styles.toolbarBtn} onPress={seleccionarImagen}>
-              <Feather name="image" size={20} color="#8890A3" />
+              <Feather name="image" size={20} color={tema.textoIcono} />
             </TouchableOpacity>
 
             <View style={styles.toolbarDivider} />
 
             <TouchableOpacity style={styles.toolbarBtn} onPress={() => editor.toggleTaskList()}>
-              <Feather name="check-square" size={20} color={editorState.isTaskListActive ? '#ff6b00' : '#8890A3'} />
+              <Feather name="check-square" size={20} color={editorState.isTaskListActive ? '#ff6b00' : tema.textoIcono} />
             </TouchableOpacity>
 
             <TouchableOpacity style={styles.toolbarBtn} onPress={() => editor.toggleBulletList()}>
-              <Feather name="list" size={20} color={editorState.isBulletListActive ? '#ff6b00' : '#8890A3'} />
+              <Feather name="list" size={20} color={editorState.isBulletListActive ? '#ff6b00' : tema.textoIcono} />
             </TouchableOpacity>
 
             <View style={styles.toolbarDivider} />
@@ -918,7 +935,7 @@ function ModalEditorNota({
             </TouchableOpacity>
 
             <TouchableOpacity style={styles.toolbarBtn} onPress={() => editor.toggleCode()}>
-              <Feather name="code" size={20} color={editorState.isCodeActive ? '#ff6b00' : '#8890A3'} />
+              <Feather name="code" size={20} color={editorState.isCodeActive ? '#ff6b00' : tema.textoIcono} />
             </TouchableOpacity>
 
             <View style={styles.toolbarDivider} />
@@ -928,7 +945,7 @@ function ModalEditorNota({
               onPress={() => editor.undo()}
               disabled={!editorState.canUndo}
             >
-              <Feather name="corner-up-left" size={20} color={editorState.canUndo ? '#8890A3' : '#444C5F'} />
+              <Feather name="corner-up-left" size={20} color={editorState.canUndo ? tema.textoIcono : tema.textoTerciario} />
             </TouchableOpacity>
 
             <TouchableOpacity
@@ -936,7 +953,7 @@ function ModalEditorNota({
               onPress={() => editor.redo()}
               disabled={!editorState.canRedo}
             >
-              <Feather name="corner-up-right" size={20} color={editorState.canRedo ? '#8890A3' : '#444C5F'} />
+              <Feather name="corner-up-right" size={20} color={editorState.canRedo ? tema.textoIcono : tema.textoTerciario} />
             </TouchableOpacity>
           </ScrollView>
         </KeyboardAvoidingView>
@@ -952,8 +969,8 @@ function ModalEditorNota({
   );
 }
 
-const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#0F172A' },
+const crearEstilos = (t: Tema) => StyleSheet.create({
+  container: { flex: 1, backgroundColor: t.fondo },
   header: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -965,22 +982,23 @@ const styles = StyleSheet.create({
     width: 38,
     height: 38,
     borderRadius: 19,
-    backgroundColor: '#182033',
+    backgroundColor: t.superficie,
     borderWidth: 1,
-    borderColor: '#222A3D',
+    borderColor: t.borde,
     justifyContent: 'center',
     alignItems: 'center',
   },
+  botonTema: { marginLeft: 10 },
   headerTitle: { fontSize: 30, fontWeight: '700', color: '#ffffff', letterSpacing: -0.5 },
-  headerSubtitle: { fontSize: 13, color: '#555D70', marginTop: 2 },
+  headerSubtitle: { fontSize: 13, color: t.textoSecundario, marginTop: 2 },
 
   busquedaFila: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#182033',
+    backgroundColor: t.superficie,
     borderRadius: 8,
     borderWidth: 1,
-    borderColor: '#222A3D',
+    borderColor: t.borde,
     marginHorizontal: 20,
     marginBottom: 12,
     paddingHorizontal: 12,
@@ -991,10 +1009,10 @@ const styles = StyleSheet.create({
   listContent: { paddingHorizontal: 12, paddingBottom: 200 },
   columnWrapper: { justifyContent: 'space-between' },
   emptyContainer: { alignItems: 'center', justifyContent: 'center', marginTop: 60 },
-  emptyText: { color: '#444C5F', fontSize: 14, marginTop: 10 },
+  emptyText: { color: t.textoTerciario, fontSize: 14, marginTop: 10 },
 
   card: {
-    backgroundColor: '#182033',
+    backgroundColor: t.superficie,
     width: '48%',
     borderRadius: 12,
     padding: 14,
@@ -1002,11 +1020,11 @@ const styles = StyleSheet.create({
     minHeight: 125,
     justifyContent: 'space-between',
     borderWidth: 1,
-    borderColor: '#222A3D',
+    borderColor: t.borde,
   },
   cardCargando: {
     ...StyleSheet.absoluteFillObject,
-    backgroundColor: '#182033ee',
+    backgroundColor: `${t.superficie}ee`,
     borderRadius: 12,
     justifyContent: 'center',
     alignItems: 'center',
@@ -1014,15 +1032,15 @@ const styles = StyleSheet.create({
   },
   cardHeader: { marginBottom: 6 },
   cardTitle: { fontSize: 15, fontWeight: '600', color: '#ececec', lineHeight: 20 },
-  cardContent: { fontSize: 12, color: '#777F92', lineHeight: 17, marginBottom: 12 },
+  cardContent: { fontSize: 12, color: t.textoSecundarioAlt, lineHeight: 17, marginBottom: 12 },
   cardFooter: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 'auto' },
-  cardDate: { fontSize: 11, color: '#444C5F' },
+  cardDate: { fontSize: 11, color: t.textoTerciario },
 
   badge: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 7, paddingVertical: 3, borderRadius: 5 },
   badgeSelector: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 10, paddingVertical: 5, borderRadius: 6 },
-  badgeLocal: { backgroundColor: '#222A3D' },
+  badgeLocal: { backgroundColor: t.borde },
   badgeCompartida: { backgroundColor: '#2a1a10', borderWidth: 1, borderColor: '#ff6b0033' },
-  badgeText: { fontSize: 11, fontWeight: '500', color: '#8890A3' },
+  badgeText: { fontSize: 11, fontWeight: '500', color: t.textoIcono },
   badgeTextCompartida: { color: '#ff6b00' },
 
   fab: {
@@ -1041,9 +1059,9 @@ const styles = StyleSheet.create({
   barraInferior: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#182033',
+    backgroundColor: t.superficie,
     borderTopWidth: 1,
-    borderTopColor: '#222A3D',
+    borderTopColor: t.borde,
     paddingHorizontal: 22,
     paddingTop: 10,
     paddingBottom: 12,
@@ -1055,7 +1073,7 @@ const styles = StyleSheet.create({
   barraMitadIzquierda: { justifyContent: 'flex-end', paddingRight: 34 },
   barraMitadDerecha: { justifyContent: 'flex-start', paddingLeft: 25 },
   barraBoton: { alignItems: 'center', justifyContent: 'center', width: 76 },
-  barraTexto: { fontSize: 10, color: '#8890A3', marginTop: 3, fontWeight: '500' },
+  barraTexto: { fontSize: 10, color: t.textoIcono, marginTop: 3, fontWeight: '500' },
   barraTextoActivo: { color: '#ff6b00' },
   barraBotonCentro: {
     position: 'absolute',
@@ -1065,9 +1083,9 @@ const styles = StyleSheet.create({
     width: 46,
     height: 46,
     borderRadius: 23,
-    backgroundColor: '#0F172A',
+    backgroundColor: t.fondo,
     borderWidth: 1,
-    borderColor: '#333B4E',
+    borderColor: t.bordeFuerte,
     justifyContent: 'center',
     alignItems: 'center',
   },
@@ -1076,7 +1094,7 @@ const styles = StyleSheet.create({
     borderColor: '#ff6b00',
   },
 
-  modalContainer: { flex: 1, backgroundColor: '#0F172A' },
+  modalContainer: { flex: 1, backgroundColor: t.fondo },
   modalHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
@@ -1084,7 +1102,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20,
     paddingVertical: 14,
     borderBottomWidth: 1,
-    borderBottomColor: '#182033',
+    borderBottomColor: t.superficie,
   },
   botonIcono: { padding: 4 },
   modalAccionesDerecha: { flexDirection: 'row', alignItems: 'center' },
@@ -1095,25 +1113,25 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    backgroundColor: '#182033',
+    backgroundColor: t.superficie,
     paddingHorizontal: 14,
     paddingVertical: 10,
     borderRadius: 8,
     marginTop: 15,
     marginHorizontal: 20,
     borderWidth: 1,
-    borderColor: '#222A3D'
+    borderColor: t.borde,
   },
   pinInfo: { flexDirection: 'row', alignItems: 'center' },
-  pinText: { color: '#8890A3', fontSize: 12 },
+  pinText: { color: t.textoIcono, fontSize: 12 },
   pinCodigo: { color: '#ff6b00', fontWeight: 'bold', fontSize: 13 },
   copiarAccion: { flexDirection: 'row', alignItems: 'center' },
-  copiarTexto: { fontSize: 11, color: '#8890A3', marginLeft: 4, fontWeight: '500' },
+  copiarTexto: { fontSize: 11, color: t.textoIcono, marginLeft: 4, fontWeight: '500' },
   copiarTextoExito: { color: '#00ff88' },
 
   opcionesFondo: { flex: 1, backgroundColor: 'rgba(0,0,0,0.6)', justifyContent: 'flex-end' },
   opcionesTarjeta: {
-    backgroundColor: '#182033',
+    backgroundColor: t.superficie,
     borderTopLeftRadius: 16,
     borderTopRightRadius: 16,
     paddingHorizontal: 20,
@@ -1121,17 +1139,17 @@ const styles = StyleSheet.create({
     paddingBottom: 34,
   },
   opcionesTitulo: { fontSize: 16, fontWeight: '700', color: '#fff', marginBottom: 4 },
-  opcionesSubtitulo: { fontSize: 12, color: '#777F92', marginBottom: 12 },
-  opcionFila: { paddingVertical: 14, borderTopWidth: 1, borderTopColor: '#222A3D' },
+  opcionesSubtitulo: { fontSize: 12, color: t.textoSecundarioAlt, marginBottom: 12 },
+  opcionFila: { paddingVertical: 14, borderTopWidth: 1, borderTopColor: t.borde },
   opcionTexto: { fontSize: 15, color: '#ccc' },
   opcionTextoQuitar: { color: '#ff4444' },
-  opcionTextoCancelar: { color: '#8890A3' },
+  opcionTextoCancelar: { color: t.textoIcono },
 
   inputNombreCreador: {
-    backgroundColor: '#182033',
+    backgroundColor: t.superficie,
     borderRadius: 8,
     borderWidth: 1,
-    borderColor: '#222A3D',
+    borderColor: t.borde,
     marginTop: 12,
     marginHorizontal: 20,
     paddingHorizontal: 14,
@@ -1148,12 +1166,12 @@ const styles = StyleSheet.create({
     flexGrow: 0.03,
     flexShrink: 0,
     borderTopWidth: 1,
-    borderTopColor: '#182033',
-    backgroundColor: '#0F172A',
+    borderTopColor: t.superficie,
+    backgroundColor: t.fondo,
   },
   toolbarContent: { paddingHorizontal: 5, alignItems: 'center', height: 54 },
   toolbarBtn: { paddingVertical: 6, paddingHorizontal: 9, marginHorizontal: 1 },
-  toolbarBtnText: { fontSize: 30, fontWeight: '700', color: '#8890A3' },
+  toolbarBtnText: { fontSize: 30, fontWeight: '700', color: t.textoIcono },
   toolbarBtnTextActivo: { color: '#ff6b00' },
-  toolbarDivider: { width: 0.8, height: 20, backgroundColor: '#222A3D', marginHorizontal: 4 },
+  toolbarDivider: { width: 0.8, height: 20, backgroundColor: t.borde, marginHorizontal: 4 },
 });
