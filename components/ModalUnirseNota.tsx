@@ -85,7 +85,7 @@ export default function ModalUnirseNota({
           <View style={styles.cabecera}>
             <Text style={styles.titulo}>Unirse a una nota</Text>
             <TouchableOpacity onPress={cerrar} disabled={cargando}>
-              <Feather name="x" size={22} color="#888" />
+              <Feather name="x" size={22} color="#8890A3" />
             </TouchableOpacity>
           </View>
 
@@ -93,7 +93,7 @@ export default function ModalUnirseNota({
           <TextInput
             style={styles.input}
             placeholder="X7K9-P2M4-Q8RT-3WYL"
-            placeholderTextColor="#444"
+            placeholderTextColor="#444C5F"
             autoCapitalize="characters"
             autoCorrect={false}
             value={pin}
@@ -105,14 +105,14 @@ export default function ModalUnirseNota({
           <TextInput
             style={styles.input}
             placeholder="¿Cómo te llamas?"
-            placeholderTextColor="#444"
+            placeholderTextColor="#444C5F"
             value={nombre}
             onChangeText={setNombre}
             editable={!cargando}
           />
 
           <TouchableOpacity style={styles.boton} onPress={unirse} disabled={cargando}>
-            {cargando ? <ActivityIndicator color="#0f0f0f" /> : <Text style={styles.botonTexto}>Unirse</Text>}
+            {cargando ? <ActivityIndicator color="#0F172A" /> : <Text style={styles.botonTexto}>Unirse</Text>}
           </TouchableOpacity>
         </View>
       </KeyboardAvoidingView>
@@ -122,15 +122,15 @@ export default function ModalUnirseNota({
 
 const styles = StyleSheet.create({
   fondo: { flex: 1, backgroundColor: 'rgba(0,0,0,0.6)', justifyContent: 'center', padding: 20 },
-  tarjeta: { backgroundColor: '#181818', borderRadius: 16, padding: 20, borderWidth: 1, borderColor: '#222' },
+  tarjeta: { backgroundColor: '#182033', borderRadius: 16, padding: 20, borderWidth: 1, borderColor: '#222A3D' },
   cabecera: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 },
   titulo: { fontSize: 17, fontWeight: '700', color: '#fff' },
-  etiqueta: { fontSize: 12, color: '#888', marginBottom: 6, marginTop: 14 },
+  etiqueta: { fontSize: 12, color: '#8890A3', marginBottom: 6, marginTop: 14 },
   input: {
-    backgroundColor: '#0f0f0f',
+    backgroundColor: '#0F172A',
     borderRadius: 8,
     borderWidth: 1,
-    borderColor: '#222',
+    borderColor: '#222A3D',
     paddingHorizontal: 12,
     paddingVertical: 10,
     color: '#fff',
@@ -143,5 +143,5 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     marginTop: 20,
   },
-  botonTexto: { color: '#0f0f0f', fontWeight: '700', fontSize: 15 },
+  botonTexto: { color: '#0F172A', fontWeight: '700', fontSize: 15 },
 });

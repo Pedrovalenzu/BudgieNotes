@@ -6,7 +6,6 @@ import {
   View,
   TouchableOpacity,
   FlatList,
-  SafeAreaView,
   StatusBar,
   Modal,
   TextInput,
@@ -15,6 +14,7 @@ import {
   KeyboardAvoidingView,
   Platform,
 } from 'react-native';
+import { SafeAreaProvider, SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Feather } from '@expo/vector-icons';
 import * as Clipboard from 'expo-clipboard';
 import * as ImagePicker from 'expo-image-picker';
@@ -74,7 +74,7 @@ const OPCIONES_CADUCIDAD: { texto: string; horas: number }[] = [
 ];
 
 const CSS_EDITOR = `
-  html, body { background-color: #0f0f0f; margin: 0; }
+  html, body { background-color: #0F172A; margin: 0; }
   .ProseMirror {
     color: #ccc !important;
     font-size: 15px;
@@ -88,23 +88,23 @@ const CSS_EDITOR = `
   .ProseMirror p { margin: 0 0 8px 0; }
   strong { color: #ff6b00 !important; }
   code {
-    background-color: #1a1a1a;
+    background-color: #182033;
     color: #00ff88 !important;
     padding: 2px 5px;
     border-radius: 4px;
     font-size: 0.85em;
   }
-  s { color: #666 !important; }
+  s { color: #666E81 !important; }
   img {
     border-radius: 10px;
     margin: 8px 0;
   }
   ul[data-type="taskList"] li > label > input {
-    border: 1px solid #555 !important;
-    background: #1a1a1a !important;
+    border: 1px solid #555D70 !important;
+    background: #182033 !important;
     accent-color: #ff6b00;
   }
-  .is-editor-empty:first-child::before { color: #333; }
+  .is-editor-empty:first-child::before { color: #333B4E; }
 `;
 
 // Va en bridgeExtensions (no injectCSS) para que se aplique al cargar, sin el texto negro por defecto de por medio
@@ -148,7 +148,22 @@ const JS_MANTENER_CURSOR_EN_TAREAS = `
 
 type Filtro = 'todas' | 'compartidas' | 'locales' | 'autodestructivas';
 
+// Alto de la barra inferior sin contar el margen de seguridad del sistema (que varía según el
+// dispositivo y se suma aparte, vía useSafeAreaInsets): paddingTop + contenido + paddingBottom.
+const ALTO_BASE_BARRA_INFERIOR = 57;
+
+// SafeAreaProvider tiene que envolver a quien use useSafeAreaInsets(), no puede ser el mismo
+// componente que lo declara — por eso el contenido real vive aparte, en PantallaPrincipal.
 export default function App() {
+  return (
+    <SafeAreaProvider>
+      <PantallaPrincipal />
+    </SafeAreaProvider>
+  );
+}
+
+function PantallaPrincipal() {
+  const insets = useSafeAreaInsets();
   const [notas, setNotas] = useState<Nota[]>([]);
   const [cargando, setCargando] = useState(true);
 
@@ -379,8 +394,8 @@ export default function App() {
   };
 
   return (
-    <SafeAreaView style={styles.container}>
-      <StatusBar barStyle="light-content" backgroundColor="#0f0f0f" />
+    <SafeAreaView style={styles.container} edges={['top', 'left', 'right']}>
+      <StatusBar barStyle="light-content" backgroundColor="#0F172A" />
 
       {/* Cabecera */}
       <View style={styles.header}>
@@ -391,25 +406,25 @@ export default function App() {
           </Text>
         </View>
         <TouchableOpacity style={styles.botonUnirse} onPress={() => setMostrarUnirse(true)}>
-          <Feather name="user-plus" size={20} color="#888" />
+          <Feather name="user-plus" size={20} color="#8890A3" />
         </TouchableOpacity>
       </View>
 
       {/* Búsqueda por título (se abre desde la lupa de la barra inferior) */}
       {busquedaActiva && (
         <View style={styles.busquedaFila}>
-          <Feather name="search" size={16} color="#666" style={{ marginRight: 8 }} />
+          <Feather name="search" size={16} color="#666E81" style={{ marginRight: 8 }} />
           <TextInput
             style={styles.busquedaInput}
             placeholder="Buscar por título..."
-            placeholderTextColor="#444"
+            placeholderTextColor="#444C5F"
             value={busqueda}
             onChangeText={setBusqueda}
             autoFocus
           />
           {busqueda.length > 0 && (
             <TouchableOpacity onPress={() => setBusqueda('')}>
-              <Feather name="x" size={16} color="#666" />
+              <Feather name="x" size={16} color="#666E81" />
             </TouchableOpacity>
           )}
         </View>
@@ -426,7 +441,7 @@ export default function App() {
         ListEmptyComponent={() => (
           !cargando ? (
             <View style={styles.emptyContainer}>
-              <Feather name="file-text" size={40} color="#333" />
+              <Feather name="file-text" size={40} color="#333B4E" />
               <Text style={styles.emptyText}>
                 {notas.length === 0 ? 'No tienes notas guardadas.' : 'Ninguna nota coincide con este filtro.'}
               </Text>
@@ -467,7 +482,7 @@ export default function App() {
                   <Feather
                     name={item.esCompartida ? "share-2" : "lock"}
                     size={10}
-                    color={item.esCompartida ? "#ff6b00" : "#888"}
+                    color={item.esCompartida ? "#ff6b00" : "#8890A3"}
                     style={{ marginRight: 4 }}
                   />
                   <Text style={[styles.badgeText, item.esCompartida && styles.badgeTextCompartida]}>
@@ -481,30 +496,35 @@ export default function App() {
       />
 
       {/* Botón Flotante */}
-      <TouchableOpacity style={styles.fab} activeOpacity={0.8} onPress={abrirCreador}>
+      <TouchableOpacity
+        style={[styles.fab, { bottom: ALTO_BASE_BARRA_INFERIOR + insets.bottom + 16 }]}
+        activeOpacity={0.8}
+        onPress={abrirCreador}
+      >
         <Feather name="plus" size={26} color="#ffffff" />
       </TouchableOpacity>
 
       {/* Barra inferior: dos mitades de ancho EXACTAMENTE igual (flex:1 cada una), con los botones
           empujados hacia el centro dentro de cada mitad — así el borde entre ambas cae siempre en
           el 50% real de la barra, justo donde está la lupa (posición absoluta), sin importar cuántos
-          botones haya a cada lado ni cuánto ocupen. */}
-      <View style={styles.barraInferior}>
+          botones haya a cada lado ni cuánto ocupen. El paddingBottom extra reserva el hueco real de
+          los gestos/botones del sistema (SafeAreaView ya no lo hace, ver edges arriba). */}
+      <View style={[styles.barraInferior, { paddingBottom: 12 + insets.bottom }]}>
         <View style={[styles.barraMitad, styles.barraMitadIzquierda]}>
           <TouchableOpacity style={styles.barraBoton} onPress={() => alternarFiltro('compartidas')}>
-            <Feather name="share-2" size={20} color={filtro === 'compartidas' ? '#ff6b00' : '#888'} />
+            <Feather name="share-2" size={20} color={filtro === 'compartidas' ? '#ff6b00' : '#8890A3'} />
             <Text style={[styles.barraTexto, filtro === 'compartidas' && styles.barraTextoActivo]}>Compartidas</Text>
           </TouchableOpacity>
 
           <TouchableOpacity style={styles.barraBoton} onPress={() => alternarFiltro('locales')}>
-            <Feather name="lock" size={20} color={filtro === 'locales' ? '#ff6b00' : '#888'} />
+            <Feather name="lock" size={20} color={filtro === 'locales' ? '#ff6b00' : '#8890A3'} />
             <Text style={[styles.barraTexto, filtro === 'locales' && styles.barraTextoActivo]}>Locales</Text>
           </TouchableOpacity>
         </View>
 
         <View style={[styles.barraMitad, styles.barraMitadDerecha]}>
           <TouchableOpacity style={styles.barraBoton} onPress={() => alternarFiltro('autodestructivas')}>
-            <Feather name="clock" size={20} color={filtro === 'autodestructivas' ? '#ff6b00' : '#888'} />
+            <Feather name="clock" size={20} color={filtro === 'autodestructivas' ? '#ff6b00' : '#8890A3'} />
             <Text style={[styles.barraTexto, filtro === 'autodestructivas' && styles.barraTextoActivo]}>Temporales</Text>
           </TouchableOpacity>
         </View>
@@ -513,7 +533,7 @@ export default function App() {
           style={[styles.barraBotonCentro, busquedaActiva && styles.barraBotonCentroActivo]}
           onPress={alternarBusqueda}
         >
-          <Feather name="search" size={22} color={busquedaActiva ? '#0f0f0f' : '#fff'} />
+          <Feather name="search" size={22} color={busquedaActiva ? '#0F172A' : '#fff'} />
         </TouchableOpacity>
       </View>
 
@@ -573,7 +593,7 @@ function ModalEditorNota({
   const editor = useEditorBridge({
     initialContent: nota?.contenido || '',
     avoidIosKeyboard: true,
-    theme: { webview: { backgroundColor: '#0f0f0f' } },
+    theme: { webview: { backgroundColor: '#0F172A' } },
     bridgeExtensions: [
       ...TenTapStartKit,
       BridgeTemaOscuro,
@@ -726,7 +746,7 @@ function ModalEditorNota({
         {/* Barra superior */}
         <View style={styles.modalHeader}>
           <TouchableOpacity onPress={onClose} style={styles.botonIcono}>
-            <Feather name="arrow-left" size={22} color="#888" />
+            <Feather name="arrow-left" size={22} color="#8890A3" />
           </TouchableOpacity>
 
           <TouchableOpacity
@@ -736,7 +756,7 @@ function ModalEditorNota({
             <Feather
               name={esCompartidaInput ? "share-2" : "lock"}
               size={12}
-              color={esCompartidaInput ? "#ff6b00" : "#888"}
+              color={esCompartidaInput ? "#ff6b00" : "#8890A3"}
               style={{ marginRight: 6 }}
             />
             <Text style={[styles.badgeText, esCompartidaInput && styles.badgeTextCompartida]}>
@@ -746,11 +766,11 @@ function ModalEditorNota({
 
           <View style={styles.modalAccionesDerecha}>
             <TouchableOpacity onPress={() => setMostrarOpcionesCaducidad(true)} style={styles.botonBorrar}>
-              <Feather name="clock" size={20} color={expiraEnInput !== undefined ? '#ff6b00' : '#888'} />
+              <Feather name="clock" size={20} color={expiraEnInput !== undefined ? '#ff6b00' : '#8890A3'} />
             </TouchableOpacity>
             {esCompartidaInput && nota?.esCreador && nota?.notaCompartidaId && (
               <TouchableOpacity onPress={() => setMostrarParticipantes(true)} style={styles.botonBorrar}>
-                <Feather name="users" size={20} color="#888" />
+                <Feather name="users" size={20} color="#8890A3" />
               </TouchableOpacity>
             )}
             {nota && (
@@ -785,7 +805,7 @@ function ModalEditorNota({
               <Feather
                 name={pinCopiado ? "check" : "copy"}
                 size={14}
-                color={pinCopiado ? "#00ff88" : "#888"}
+                color={pinCopiado ? "#00ff88" : "#8890A3"}
               />
               <Text style={[styles.copiarTexto, pinCopiado && styles.copiarTextoExito]}>
                 {pinCopiado ? '¡Copiado!' : 'Copiar'}
@@ -799,7 +819,7 @@ function ModalEditorNota({
           <TextInput
             style={styles.inputNombreCreador}
             placeholder="Tu nombre (se lo verán los demás)"
-            placeholderTextColor="#444"
+            placeholderTextColor="#444C5F"
             value={nombreCreadorInput}
             onChangeText={setNombreCreadorInput}
           />
@@ -853,7 +873,7 @@ function ModalEditorNota({
             <TextInput
               style={styles.inputTitulo}
               placeholder="Título"
-              placeholderTextColor="#444"
+              placeholderTextColor="#444C5F"
               value={tituloInput}
               onChangeText={setTituloInput}
             />
@@ -870,17 +890,17 @@ function ModalEditorNota({
             keyboardShouldPersistTaps="always"
           >
             <TouchableOpacity style={styles.toolbarBtn} onPress={seleccionarImagen}>
-              <Feather name="image" size={20} color="#888" />
+              <Feather name="image" size={20} color="#8890A3" />
             </TouchableOpacity>
 
             <View style={styles.toolbarDivider} />
 
             <TouchableOpacity style={styles.toolbarBtn} onPress={() => editor.toggleTaskList()}>
-              <Feather name="check-square" size={20} color={editorState.isTaskListActive ? '#ff6b00' : '#888'} />
+              <Feather name="check-square" size={20} color={editorState.isTaskListActive ? '#ff6b00' : '#8890A3'} />
             </TouchableOpacity>
 
             <TouchableOpacity style={styles.toolbarBtn} onPress={() => editor.toggleBulletList()}>
-              <Feather name="list" size={20} color={editorState.isBulletListActive ? '#ff6b00' : '#888'} />
+              <Feather name="list" size={20} color={editorState.isBulletListActive ? '#ff6b00' : '#8890A3'} />
             </TouchableOpacity>
 
             <View style={styles.toolbarDivider} />
@@ -898,7 +918,7 @@ function ModalEditorNota({
             </TouchableOpacity>
 
             <TouchableOpacity style={styles.toolbarBtn} onPress={() => editor.toggleCode()}>
-              <Feather name="code" size={20} color={editorState.isCodeActive ? '#ff6b00' : '#888'} />
+              <Feather name="code" size={20} color={editorState.isCodeActive ? '#ff6b00' : '#8890A3'} />
             </TouchableOpacity>
 
             <View style={styles.toolbarDivider} />
@@ -908,7 +928,7 @@ function ModalEditorNota({
               onPress={() => editor.undo()}
               disabled={!editorState.canUndo}
             >
-              <Feather name="corner-up-left" size={20} color={editorState.canUndo ? '#888' : '#444'} />
+              <Feather name="corner-up-left" size={20} color={editorState.canUndo ? '#8890A3' : '#444C5F'} />
             </TouchableOpacity>
 
             <TouchableOpacity
@@ -916,7 +936,7 @@ function ModalEditorNota({
               onPress={() => editor.redo()}
               disabled={!editorState.canRedo}
             >
-              <Feather name="corner-up-right" size={20} color={editorState.canRedo ? '#888' : '#444'} />
+              <Feather name="corner-up-right" size={20} color={editorState.canRedo ? '#8890A3' : '#444C5F'} />
             </TouchableOpacity>
           </ScrollView>
         </KeyboardAvoidingView>
@@ -933,7 +953,7 @@ function ModalEditorNota({
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#0f0f0f' },
+  container: { flex: 1, backgroundColor: '#0F172A' },
   header: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -945,22 +965,22 @@ const styles = StyleSheet.create({
     width: 38,
     height: 38,
     borderRadius: 19,
-    backgroundColor: '#181818',
+    backgroundColor: '#182033',
     borderWidth: 1,
-    borderColor: '#222',
+    borderColor: '#222A3D',
     justifyContent: 'center',
     alignItems: 'center',
   },
   headerTitle: { fontSize: 30, fontWeight: '700', color: '#ffffff', letterSpacing: -0.5 },
-  headerSubtitle: { fontSize: 13, color: '#555555', marginTop: 2 },
+  headerSubtitle: { fontSize: 13, color: '#555D70', marginTop: 2 },
 
   busquedaFila: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#181818',
+    backgroundColor: '#182033',
     borderRadius: 8,
     borderWidth: 1,
-    borderColor: '#222',
+    borderColor: '#222A3D',
     marginHorizontal: 20,
     marginBottom: 12,
     paddingHorizontal: 12,
@@ -968,13 +988,13 @@ const styles = StyleSheet.create({
   },
   busquedaInput: { flex: 1, color: '#fff', fontSize: 14 },
 
-  listContent: { paddingHorizontal: 12, paddingBottom: 160 },
+  listContent: { paddingHorizontal: 12, paddingBottom: 200 },
   columnWrapper: { justifyContent: 'space-between' },
   emptyContainer: { alignItems: 'center', justifyContent: 'center', marginTop: 60 },
-  emptyText: { color: '#444', fontSize: 14, marginTop: 10 },
+  emptyText: { color: '#444C5F', fontSize: 14, marginTop: 10 },
 
   card: {
-    backgroundColor: '#181818',
+    backgroundColor: '#182033',
     width: '48%',
     borderRadius: 12,
     padding: 14,
@@ -982,11 +1002,11 @@ const styles = StyleSheet.create({
     minHeight: 125,
     justifyContent: 'space-between',
     borderWidth: 1,
-    borderColor: '#222222',
+    borderColor: '#222A3D',
   },
   cardCargando: {
     ...StyleSheet.absoluteFillObject,
-    backgroundColor: '#181818ee',
+    backgroundColor: '#182033ee',
     borderRadius: 12,
     justifyContent: 'center',
     alignItems: 'center',
@@ -994,15 +1014,15 @@ const styles = StyleSheet.create({
   },
   cardHeader: { marginBottom: 6 },
   cardTitle: { fontSize: 15, fontWeight: '600', color: '#ececec', lineHeight: 20 },
-  cardContent: { fontSize: 12, color: '#777777', lineHeight: 17, marginBottom: 12 },
+  cardContent: { fontSize: 12, color: '#777F92', lineHeight: 17, marginBottom: 12 },
   cardFooter: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 'auto' },
-  cardDate: { fontSize: 11, color: '#444444' },
+  cardDate: { fontSize: 11, color: '#444C5F' },
 
   badge: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 7, paddingVertical: 3, borderRadius: 5 },
   badgeSelector: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 10, paddingVertical: 5, borderRadius: 6 },
-  badgeLocal: { backgroundColor: '#222222' },
+  badgeLocal: { backgroundColor: '#222A3D' },
   badgeCompartida: { backgroundColor: '#2a1a10', borderWidth: 1, borderColor: '#ff6b0033' },
-  badgeText: { fontSize: 11, fontWeight: '500', color: '#888888' },
+  badgeText: { fontSize: 11, fontWeight: '500', color: '#8890A3' },
   badgeTextCompartida: { color: '#ff6b00' },
 
   fab: {
@@ -1021,9 +1041,9 @@ const styles = StyleSheet.create({
   barraInferior: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#181818',
+    backgroundColor: '#182033',
     borderTopWidth: 1,
-    borderTopColor: '#222',
+    borderTopColor: '#222A3D',
     paddingHorizontal: 22,
     paddingTop: 10,
     paddingBottom: 12,
@@ -1033,9 +1053,9 @@ const styles = StyleSheet.create({
   // botones se empujan hacia ese borde (hacia el centro), para quedar pegados a la lupa.
   barraMitad: { flex: 1, flexDirection: 'row' },
   barraMitadIzquierda: { justifyContent: 'flex-end', paddingRight: 34 },
-  barraMitadDerecha: { justifyContent: 'flex-start', paddingLeft: 44 },
-  barraBoton: { alignItems: 'center', justifyContent: 'center', width: 66 },
-  barraTexto: { fontSize: 10, color: '#888', marginTop: 3, fontWeight: '500' },
+  barraMitadDerecha: { justifyContent: 'flex-start', paddingLeft: 25 },
+  barraBoton: { alignItems: 'center', justifyContent: 'center', width: 76 },
+  barraTexto: { fontSize: 10, color: '#8890A3', marginTop: 3, fontWeight: '500' },
   barraTextoActivo: { color: '#ff6b00' },
   barraBotonCentro: {
     position: 'absolute',
@@ -1045,9 +1065,9 @@ const styles = StyleSheet.create({
     width: 46,
     height: 46,
     borderRadius: 23,
-    backgroundColor: '#0f0f0f',
+    backgroundColor: '#0F172A',
     borderWidth: 1,
-    borderColor: '#333',
+    borderColor: '#333B4E',
     justifyContent: 'center',
     alignItems: 'center',
   },
@@ -1056,7 +1076,7 @@ const styles = StyleSheet.create({
     borderColor: '#ff6b00',
   },
 
-  modalContainer: { flex: 1, backgroundColor: '#0f0f0f' },
+  modalContainer: { flex: 1, backgroundColor: '#0F172A' },
   modalHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
@@ -1064,7 +1084,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20,
     paddingVertical: 14,
     borderBottomWidth: 1,
-    borderBottomColor: '#1a1a1a',
+    borderBottomColor: '#182033',
   },
   botonIcono: { padding: 4 },
   modalAccionesDerecha: { flexDirection: 'row', alignItems: 'center' },
@@ -1075,25 +1095,25 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    backgroundColor: '#181818',
+    backgroundColor: '#182033',
     paddingHorizontal: 14,
     paddingVertical: 10,
     borderRadius: 8,
     marginTop: 15,
     marginHorizontal: 20,
     borderWidth: 1,
-    borderColor: '#222'
+    borderColor: '#222A3D'
   },
   pinInfo: { flexDirection: 'row', alignItems: 'center' },
-  pinText: { color: '#888', fontSize: 12 },
+  pinText: { color: '#8890A3', fontSize: 12 },
   pinCodigo: { color: '#ff6b00', fontWeight: 'bold', fontSize: 13 },
   copiarAccion: { flexDirection: 'row', alignItems: 'center' },
-  copiarTexto: { fontSize: 11, color: '#888', marginLeft: 4, fontWeight: '500' },
+  copiarTexto: { fontSize: 11, color: '#8890A3', marginLeft: 4, fontWeight: '500' },
   copiarTextoExito: { color: '#00ff88' },
 
   opcionesFondo: { flex: 1, backgroundColor: 'rgba(0,0,0,0.6)', justifyContent: 'flex-end' },
   opcionesTarjeta: {
-    backgroundColor: '#181818',
+    backgroundColor: '#182033',
     borderTopLeftRadius: 16,
     borderTopRightRadius: 16,
     paddingHorizontal: 20,
@@ -1101,17 +1121,17 @@ const styles = StyleSheet.create({
     paddingBottom: 34,
   },
   opcionesTitulo: { fontSize: 16, fontWeight: '700', color: '#fff', marginBottom: 4 },
-  opcionesSubtitulo: { fontSize: 12, color: '#777', marginBottom: 12 },
-  opcionFila: { paddingVertical: 14, borderTopWidth: 1, borderTopColor: '#222' },
+  opcionesSubtitulo: { fontSize: 12, color: '#777F92', marginBottom: 12 },
+  opcionFila: { paddingVertical: 14, borderTopWidth: 1, borderTopColor: '#222A3D' },
   opcionTexto: { fontSize: 15, color: '#ccc' },
   opcionTextoQuitar: { color: '#ff4444' },
-  opcionTextoCancelar: { color: '#888' },
+  opcionTextoCancelar: { color: '#8890A3' },
 
   inputNombreCreador: {
-    backgroundColor: '#181818',
+    backgroundColor: '#182033',
     borderRadius: 8,
     borderWidth: 1,
-    borderColor: '#222',
+    borderColor: '#222A3D',
     marginTop: 12,
     marginHorizontal: 20,
     paddingHorizontal: 14,
@@ -1128,12 +1148,12 @@ const styles = StyleSheet.create({
     flexGrow: 0.03,
     flexShrink: 0,
     borderTopWidth: 1,
-    borderTopColor: '#1a1a1a',
-    backgroundColor: '#0f0f0f',
+    borderTopColor: '#182033',
+    backgroundColor: '#0F172A',
   },
   toolbarContent: { paddingHorizontal: 5, alignItems: 'center', height: 54 },
   toolbarBtn: { paddingVertical: 6, paddingHorizontal: 9, marginHorizontal: 1 },
-  toolbarBtnText: { fontSize: 30, fontWeight: '700', color: '#888' },
+  toolbarBtnText: { fontSize: 30, fontWeight: '700', color: '#8890A3' },
   toolbarBtnTextActivo: { color: '#ff6b00' },
-  toolbarDivider: { width: 0.8, height: 20, backgroundColor: '#222', marginHorizontal: 4 },
+  toolbarDivider: { width: 0.8, height: 20, backgroundColor: '#222A3D', marginHorizontal: 4 },
 });
