@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import {
   ActivityIndicator,
   StyleSheet,
@@ -12,6 +12,7 @@ import {
   Alert,
   ScrollView,
   KeyboardAvoidingView,
+  Keyboard,
   Platform,
 } from 'react-native';
 import { SafeAreaProvider, SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -181,6 +182,7 @@ function PantallaPrincipal() {
   const [editorSession, setEditorSession] = useState(0);
   const [mostrarUnirse, setMostrarUnirse] = useState(false);
   const [cargandoNotaId, setCargandoNotaId] = useState<string | null>(null);
+  const [mostrarConfirmarBorrado, setMostrarConfirmarBorrado] = useState(false);
 
   // Barra inferior: filtro de tipo de nota + búsqueda por título
   const [filtro, setFiltro] = useState<Filtro>('todas');
@@ -366,39 +368,33 @@ function PantallaPrincipal() {
     setMostrarUnirse(false);
   };
 
-  // 4. BORRAR UNA NOTA
+  // 4. BORRAR UNA NOTA (confirmación con panel propio, igual que el resto de la app —
+  // Alert.alert es del sistema operativo y no se puede pintar con los colores del tema)
   const borrarNota = () => {
     if (!notaSeleccionada) return;
+    setMostrarConfirmarBorrado(true);
+  };
 
-    Alert.alert(
-      'Borrar nota',
-      '¿Seguro que quieres borrar esta nota? Esta acción no se puede deshacer.',
-      [
-        { text: 'Cancelar', style: 'cancel' },
-        {
-          text: 'Borrar',
-          style: 'destructive',
-          onPress: async () => {
-            if (notaSeleccionada.notaCompartidaId) {
-              try {
-                if (notaSeleccionada.esCreador) {
-                  await borrarNotaCompartidaDelServidor(notaSeleccionada.notaCompartidaId);
-                } else {
-                  await salirDeNotaCompartida(notaSeleccionada.notaCompartidaId);
-                }
-              } catch (error) {
-                console.error('Error al limpiar la nota compartida en Supabase:', error);
-              }
-            }
+  const confirmarBorrado = async () => {
+    if (!notaSeleccionada) return;
+    setMostrarConfirmarBorrado(false);
 
-            const notasFiltradas = notas.filter(n => n.id !== notaSeleccionada.id);
-            setNotas(notasFiltradas);
-            guardarEnStorage(notasFiltradas);
-            setModalVisible(false);
-          },
-        },
-      ]
-    );
+    if (notaSeleccionada.notaCompartidaId) {
+      try {
+        if (notaSeleccionada.esCreador) {
+          await borrarNotaCompartidaDelServidor(notaSeleccionada.notaCompartidaId);
+        } else {
+          await salirDeNotaCompartida(notaSeleccionada.notaCompartidaId);
+        }
+      } catch (error) {
+        console.error('Error al limpiar la nota compartida en Supabase:', error);
+      }
+    }
+
+    const notasFiltradas = notas.filter(n => n.id !== notaSeleccionada.id);
+    setNotas(notasFiltradas);
+    guardarEnStorage(notasFiltradas);
+    setModalVisible(false);
   };
 
   return (
@@ -408,7 +404,9 @@ function PantallaPrincipal() {
       {/* Cabecera */}
       <View style={styles.header}>
         <View style={{ flex: 1 }}>
-          <Text style={styles.headerTitle}>Budgie Notes</Text>
+          <Text style={styles.headerTitle}>
+            {filtro === 'compartidas' ? 'Notas compartidas' : filtro === 'locales' ? 'Notas Locales' : 'Budgie Notes'}
+          </Text>
           <Text style={styles.headerSubtitle}>
             {cargando ? 'Cargando...' : `${notasVisibles.length} notas guardadas`}
           </Text>
@@ -568,6 +566,40 @@ function PantallaPrincipal() {
         onUnido={notaUnida}
         pinesUnidos={notas.filter(n => n.pinAcceso).map(n => n.pinAcceso as string)}
       />
+
+      {/* Confirmación de borrado (Alert.alert es del sistema operativo y no se puede pintar
+          con los colores del tema — mismo panel propio que el resto de la app) */}
+      <Modal
+        visible={mostrarConfirmarBorrado}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setMostrarConfirmarBorrado(false)}
+      >
+        <TouchableOpacity
+          style={styles.opcionesFondo}
+          activeOpacity={1}
+          onPress={() => setMostrarConfirmarBorrado(false)}
+        >
+          <TouchableOpacity
+            style={[styles.opcionesTarjeta, { paddingBottom: Math.max(20, insets.bottom + 12) }]}
+            activeOpacity={1}
+            onPress={() => {}}
+          >
+            <Text style={styles.opcionesTitulo}>Borrar nota</Text>
+            <Text style={styles.opcionesSubtitulo}>
+              ¿Seguro que quieres borrar esta nota? Esta acción no se puede deshacer.
+            </Text>
+
+            <TouchableOpacity style={styles.opcionFila} onPress={confirmarBorrado}>
+              <Text style={[styles.opcionTexto, styles.opcionTextoQuitar]}>Borrar</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity style={styles.opcionFila} onPress={() => setMostrarConfirmarBorrado(false)}>
+              <Text style={[styles.opcionTexto, styles.opcionTextoCancelar]}>Cancelar</Text>
+            </TouchableOpacity>
+          </TouchableOpacity>
+        </TouchableOpacity>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -607,6 +639,31 @@ function ModalEditorNota({
   const [mostrarParticipantes, setMostrarParticipantes] = useState(false);
   const [guardando, setGuardando] = useState(false);
   const [conflicto, setConflicto] = useState<ConflictoEdicionError | null>(null);
+  const insets = useSafeAreaInsets();
+
+  // En Android, adjustPan ya desplaza algo la ventana al mostrarse el teclado (aunque el foco
+  // esté dentro del WebView del editor, no en un EditText nativo), pero no lo suficiente para
+  // dejar la barra de herramientas visible. En vez de sumar la altura completa del teclado (que
+  // se solapa con lo que el sistema ya ha desplazado y hace que la barra suba de más), se mide
+  // cuánto se solapa realmente el teclado con la posición actual del contenido y solo se
+  // compensa esa diferencia.
+  const refContenidoEditor = useRef<View>(null);
+  const [alturaTeclado, setAlturaTeclado] = useState(0);
+  useEffect(() => {
+    if (Platform.OS !== 'android') return;
+    const mostrar = Keyboard.addListener('keyboardDidShow', e => {
+      const tecladoArriba = e.endCoordinates.screenY;
+      refContenidoEditor.current?.measureInWindow((_x, y, _w, alto) => {
+        const solape = y + alto - tecladoArriba;
+        setAlturaTeclado(solape > 0 ? solape : 0);
+      });
+    });
+    const ocultar = Keyboard.addListener('keyboardDidHide', () => setAlturaTeclado(0));
+    return () => {
+      mostrar.remove();
+      ocultar.remove();
+    };
+  }, []);
 
   const editor = useEditorBridge({
     initialContent: nota?.contenido || '',
@@ -750,7 +807,7 @@ function ModalEditorNota({
   };
 
   return (
-    <Modal visible={visible} animationType="slide" transparent={false}>
+    <Modal visible={visible} animationType="slide" transparent={false} onRequestClose={onClose}>
       <SafeAreaView style={styles.modalContainer}>
 
         {/* Barra superior */}
@@ -847,7 +904,11 @@ function ModalEditorNota({
             activeOpacity={1}
             onPress={() => setMostrarOpcionesCaducidad(false)}
           >
-            <TouchableOpacity style={styles.opcionesTarjeta} activeOpacity={1} onPress={() => {}}>
+            <TouchableOpacity
+              style={[styles.opcionesTarjeta, { paddingBottom: Math.max(20, insets.bottom + 12) }]}
+              activeOpacity={1}
+              onPress={() => {}}
+            >
               <Text style={styles.opcionesTitulo}>Autodestrucción</Text>
               <Text style={styles.opcionesSubtitulo}>
                 {expiraEnInput !== undefined
@@ -883,7 +944,11 @@ function ModalEditorNota({
           onRequestClose={() => setConflicto(null)}
         >
           <TouchableOpacity style={styles.opcionesFondo} activeOpacity={1} onPress={() => setConflicto(null)}>
-            <TouchableOpacity style={styles.opcionesTarjeta} activeOpacity={1} onPress={() => {}}>
+            <TouchableOpacity
+              style={[styles.opcionesTarjeta, { paddingBottom: Math.max(20, insets.bottom + 12) }]}
+              activeOpacity={1}
+              onPress={() => {}}
+            >
               <Text style={styles.opcionesTitulo}>Alguien más ha editado esta nota</Text>
               <Text style={styles.opcionesSubtitulo}>
                 {conflicto?.editadoPor ?? 'Otra persona'} ha guardado cambios mientras la tenías abierta. ¿Qué quieres hacer?
@@ -921,6 +986,7 @@ function ModalEditorNota({
           style={{ flex: 1 }}
           behavior={Platform.OS === 'ios' ? 'padding' : undefined}
         >
+          <View ref={refContenidoEditor} style={{ flex: 1, paddingBottom: alturaTeclado }}>
           <View style={styles.editorBody}>
             <TextInput
               style={styles.inputTitulo}
@@ -991,6 +1057,7 @@ function ModalEditorNota({
               <Feather name="corner-up-right" size={20} color={editorState.canRedo ? tema.textoIcono : tema.textoTerciario} />
             </TouchableOpacity>
           </ScrollView>
+          </View>
         </KeyboardAvoidingView>
 
       </SafeAreaView>
@@ -1171,7 +1238,6 @@ const crearEstilos = (t: Tema) => StyleSheet.create({
     borderTopRightRadius: 16,
     paddingHorizontal: 20,
     paddingTop: 20,
-    paddingBottom: 34,
   },
   opcionesTitulo: { fontSize: 16, fontWeight: '700', color: '#fff', marginBottom: 4 },
   opcionesSubtitulo: { fontSize: 12, color: t.textoSecundarioAlt, marginBottom: 12 },
@@ -1195,7 +1261,7 @@ const crearEstilos = (t: Tema) => StyleSheet.create({
   },
 
   editorBody: { flex: 1, marginTop: 15, paddingHorizontal: 20 },
-  inputTitulo: { fontSize: 22, fontWeight: '700', color: '#fff', marginBottom: 15 },
+  inputTitulo: { fontSize: 22, fontWeight: '700', color: '#ff6b00', marginBottom: 15 },
 
   toolbar: {
     height: 44,
