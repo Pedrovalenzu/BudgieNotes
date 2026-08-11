@@ -35,13 +35,19 @@ import {
   unirseANotaPorPin,
 } from './lib/notasCompartidas';
 import { mensajeDeError } from './lib/errores';
+import { borrarImagenesLocalesDeNota, moverImagenesEmbebidasAArchivos } from './lib/imagenesLocales';
 import { Nota } from './types';
 import { Tema } from './lib/tema';
 import { TemaProvider, useTema } from './lib/TemaContext';
 import ModalUnirseNota from './components/ModalUnirseNota';
 import ModalParticipantes from './components/ModalParticipantes';
 
-const CLAVE_STORAGE = '@mis_notas_locales';
+// Formato antiguo (una sola clave con TODAS las notas en un único JSON) — solo se lee para
+// migrar una vez a "una fila por nota" (ver guardarEnStorage/migrarDesdeFormatoAntiguo en
+// PantallaPrincipal). No se vuelve a escribir nunca en esta clave.
+const CLAVE_STORAGE_ANTIGUA = '@mis_notas_locales';
+const CLAVE_INDICE = '@notas_indice';
+const claveNota = (id: string) => `@nota_${id}`;
 
 // Convierte el HTML de una nota a texto plano para la previsualización de la tarjeta
 const textoPlano = (html: string) => {
@@ -248,16 +254,40 @@ function PantallaPrincipal() {
     setCargando(true);
     setErrorAlCargar(null);
     try {
-      const datosJson = await AsyncStorage.getItem(CLAVE_STORAGE);
-      const notasGuardadas: Nota[] = datosJson !== null ? JSON.parse(datosJson) : [];
-      const vigentes = notasGuardadas.filter(n => !notaExpirada(n));
+      let vigentes: Nota[];
+      let necesitaGuardar = false;
+      const indiceJson = await AsyncStorage.getItem(CLAVE_INDICE);
+
+      if (indiceJson === null) {
+        // Todavía no se ha migrado a "una fila por nota": si existe el formato antiguo (todo en
+        // una sola clave), se migra una vez (y ya deja escrito el resultado). Si tampoco existe,
+        // es la primera vez que se abre la app.
+        vigentes = await migrarDesdeFormatoAntiguo();
+      } else {
+        const ids: string[] = JSON.parse(indiceJson);
+        const pares = await AsyncStorage.multiGet(ids.map(claveNota));
+        const notasCargadas: Nota[] = [];
+        for (const [clave, valor] of pares) {
+          if (valor === null) continue; // referencia huérfana en el índice: se ignora
+          try {
+            notasCargadas.push(JSON.parse(valor));
+          } catch (error) {
+            // Una nota concreta corrupta o ilegible ya NO bloquea las demás: se salta y se avisa,
+            // en vez de perder acceso a todo el resto (que es justo lo que se quiere evitar).
+            console.error(`Nota ilegible (${clave}), se omite:`, error);
+          }
+        }
+        vigentes = notasCargadas.filter(n => !notaExpirada(n));
+        necesitaGuardar = vigentes.length !== notasCargadas.length; // se podaron caducadas
+      }
+
       setNotas(vigentes);
       // Se marca aquí, de forma síncrona, y no dentro de un setState: así ninguna acción del
       // usuario que dispare guardarEnStorage justo después puede colarse antes de que el cerrojo
       // esté activado (ver comentario junto a la declaración del ref).
       notasCargadasDeVerdad.current = true;
-      if (vigentes.length !== notasGuardadas.length) {
-        guardarEnStorage(vigentes);
+      if (necesitaGuardar) {
+        await guardarEnStorage(vigentes);
       }
     } catch (error) {
       console.error('Error al cargar notas del almacenamiento local:', error);
@@ -272,7 +302,27 @@ function PantallaPrincipal() {
     }
   };
 
-  // 2. GUARDAR EL ARRAY DE NOTAS EN EL MÓVIL
+  // Formato antiguo (antes de esta migración): todas las notas en un único JSON bajo una sola
+  // clave — el mismo diseño que causó la pérdida total de notas al superar el límite de ~2MB por
+  // fila de SQLite en Android (ver CLAUDE.md). Se migra una sola vez a "una fila por nota".
+  const migrarDesdeFormatoAntiguo = async (): Promise<Nota[]> => {
+    const datosJson = await AsyncStorage.getItem(CLAVE_STORAGE_ANTIGUA);
+    if (datosJson === null) return [];
+
+    const notasAntiguas: Nota[] = JSON.parse(datosJson);
+    const vigentes = notasAntiguas.filter(n => !notaExpirada(n));
+
+    const escrituras: [string, string][] = vigentes.map(n => [claveNota(n.id), JSON.stringify(n)]);
+    await AsyncStorage.multiSet([...escrituras, [CLAVE_INDICE, JSON.stringify(vigentes.map(n => n.id))]]);
+    await AsyncStorage.removeItem(CLAVE_STORAGE_ANTIGUA);
+    return vigentes;
+  };
+
+  // 2. GUARDAR LAS NOTAS EN EL MÓVIL — cada nota en su propia fila de AsyncStorage (clave
+  // `@nota_<id>`), más un índice pequeño con el orden de ids. Así una nota enorme (o corrupta)
+  // nunca puede arrastrar a las demás: como mucho se pierde ella, nunca el resto de la lista —
+  // a diferencia del diseño anterior (todas en una sola fila), que perdía TODO si esa única fila
+  // superaba el límite de ~2MB por fila de SQLite en Android (ver CLAUDE.md).
   const guardarEnStorage = async (nuevasNotas: Nota[]) => {
     if (!notasCargadasDeVerdad.current) {
       // No debería poder llegar aquí (la UI que dispara guardados está bloqueada mientras se
@@ -281,8 +331,26 @@ function PantallaPrincipal() {
       return;
     }
     try {
-      const datosJson = JSON.stringify(nuevasNotas);
-      await AsyncStorage.setItem(CLAVE_STORAGE, datosJson);
+      const idsNuevos = nuevasNotas.map(n => n.id);
+      const indiceAnteriorJson = await AsyncStorage.getItem(CLAVE_INDICE);
+      const idsAnteriores: string[] = indiceAnteriorJson !== null ? JSON.parse(indiceAnteriorJson) : [];
+      const idsEliminados = idsAnteriores.filter(id => !idsNuevos.includes(id));
+
+      const escrituras: [string, string][] = nuevasNotas.map(n => [claveNota(n.id), JSON.stringify(n)]);
+      // Aviso temprano (solo en consola, nada bloqueante) si UNA nota concreta se acerca al
+      // límite real de una fila de SQLite en Android (CursorWindow, ~2MB) — con el diseño
+      // anterior esto sumaba TODAS las notas; ahora es por nota individual, mucho más difícil de
+      // alcanzar solo con texto.
+      for (const [clave, valor] of escrituras) {
+        if (valor.length > 1.5 * 1024 * 1024) {
+          console.error(`Aviso: la nota ${clave} pesa ${(valor.length / 1024 / 1024).toFixed(1)}MB, cerca del límite por fila en Android.`);
+        }
+      }
+
+      await AsyncStorage.multiSet([...escrituras, [CLAVE_INDICE, JSON.stringify(idsNuevos)]]);
+      if (idsEliminados.length > 0) {
+        await AsyncStorage.multiRemove(idsEliminados.map(claveNota));
+      }
     } catch (error) {
       console.error('Error al guardar notas en el almacenamiento local:', error);
       Alert.alert(
@@ -315,7 +383,12 @@ function PantallaPrincipal() {
     try {
       const clave = await derivarClaveDesdePin(nota.pinAcceso, nota.salCifrado);
       const { titulo, contenidoHtml, editadoEn } = await cargarNotaCompartida(nota.notaCompartidaId, clave);
-      notaParaAbrir = { ...nota, titulo, contenido: contenidoHtml, ultimaEdicionConocida: editadoEn };
+      // Igual que al guardar: lo descargado de Supabase trae las imágenes en base64 (para poder
+      // mostrarlas), pero antes de persistirlo aquí se mueven a archivos aparte (ver guardar() en
+      // ModalEditorNota para el porqué). De paso se limpia la versión anterior de este dispositivo.
+      const contenidoParaGuardarLocal = moverImagenesEmbebidasAArchivos(contenidoHtml);
+      borrarImagenesLocalesDeNota(nota.contenido);
+      notaParaAbrir = { ...nota, titulo, contenido: contenidoParaGuardarLocal, ultimaEdicionConocida: editadoEn };
 
       const notasActualizadas = notas.map(n => (n.id === nota.id ? notaParaAbrir : n));
       setNotas(notasActualizadas);
@@ -421,6 +494,8 @@ function PantallaPrincipal() {
         console.error('Error al limpiar la nota compartida en Supabase:', error);
       }
     }
+
+    borrarImagenesLocalesDeNota(notaSeleccionada.contenido);
 
     const notasFiltradas = notas.filter(n => n.id !== notaSeleccionada.id);
     setNotas(notasFiltradas);
@@ -797,6 +872,13 @@ function ModalEditorNota({
 
   const guardar = async (forzar: boolean = false) => {
     const contenido = await editor.getHTML();
+    // Lo que se guarda en AsyncStorage nunca lleva imágenes embebidas en base64: cada nota se
+    // guarda junto a todas las demás bajo una sola clave, y AsyncStorage en Android usa SQLite,
+    // que no puede leer una fila de más de ~2MB (límite de CursorWindow). Con solo dos fotos ya es
+    // fácil superarlo, y al superarlo deja de poderse leer NINGUNA nota, no solo esa — por eso las
+    // imágenes se mueven a archivos aparte y en el HTML solo queda su ruta local (ver
+    // lib/imagenesLocales.ts). El envío a Supabase (más abajo) sigue usando el base64 original.
+    const contenidoParaGuardarLocal = moverImagenesEmbebidasAArchivos(contenido);
 
     if (!esCompartidaInput || !pinInput || !salInput) {
       // Se acaba de desactivar "Compartida" en una nota que sí llegó a existir en Supabase:
@@ -818,7 +900,13 @@ function ModalEditorNota({
         }
       }
 
-      onSave({ titulo: tituloInput, contenido, esCompartida: esCompartidaInput, expiraEn: expiraEnInput, esFavorita: favoritaInput });
+      onSave({
+        titulo: tituloInput,
+        contenido: contenidoParaGuardarLocal,
+        esCompartida: esCompartidaInput,
+        expiraEn: expiraEnInput,
+        esFavorita: favoritaInput,
+      });
       return;
     }
 
@@ -850,7 +938,7 @@ function ModalEditorNota({
 
       onSave({
         titulo: tituloInput,
-        contenido,
+        contenido: contenidoParaGuardarLocal,
         esCompartida: true,
         expiraEn: expiraEnInput,
         pinAcceso: pinInput,
