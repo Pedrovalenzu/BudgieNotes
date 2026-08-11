@@ -151,7 +151,7 @@ const JS_MANTENER_CURSOR_EN_TAREAS = `
   })();
 `;
 
-type Filtro = 'todas' | 'compartidas' | 'locales' | 'autodestructivas';
+type Filtro = 'todas' | 'compartidas' | 'locales' | 'autodestructivas' | 'favoritas';
 
 // Alto de la barra inferior sin contar el margen de seguridad del sistema (que varía según el
 // dispositivo y se suma aparte, vía useSafeAreaInsets): paddingTop + contenido + paddingBottom.
@@ -175,6 +175,13 @@ function PantallaPrincipal() {
   const styles = useMemo(() => crearEstilos(tema), [tema]);
   const [notas, setNotas] = useState<Nota[]>([]);
   const [cargando, setCargando] = useState(true);
+  const [errorAlCargar, setErrorAlCargar] = useState<string | null>(null);
+  // Cerrojo de seguridad, aparte del estado `cargando`: mientras esté a false, ninguna escritura
+  // en AsyncStorage puede completarse. Es un ref (no state) porque tiene que poder consultarse de
+  // forma síncrona justo después de leer el almacenamiento, sin esperar a un re-render — así se
+  // evita la ventana de carrera en la que una nota nueva se guarda antes de saber qué había ya
+  // guardado, y esa escritura borra sin querer todo lo anterior (locales y compartidas).
+  const notasCargadasDeVerdad = useRef(false);
 
   // Estados del Editor
   const [modalVisible, setModalVisible] = useState(false);
@@ -204,6 +211,7 @@ function PantallaPrincipal() {
     if (filtro === 'compartidas' && !n.esCompartida) return false;
     if (filtro === 'locales' && n.esCompartida) return false;
     if (filtro === 'autodestructivas' && n.expiraEn === undefined) return false;
+    if (filtro === 'favoritas' && !n.esFavorita) return false;
     if (busqueda.trim() && !n.titulo.toLowerCase().includes(busqueda.trim().toLowerCase())) return false;
     return true;
   });
@@ -237,18 +245,28 @@ function PantallaPrincipal() {
   }, []);
 
   const cargarNotasGuardadas = async () => {
+    setCargando(true);
+    setErrorAlCargar(null);
     try {
       const datosJson = await AsyncStorage.getItem(CLAVE_STORAGE);
-      if (datosJson !== null) {
-        const notasGuardadas: Nota[] = JSON.parse(datosJson);
-        const vigentes = notasGuardadas.filter(n => !notaExpirada(n));
-        setNotas(vigentes);
-        if (vigentes.length !== notasGuardadas.length) {
-          guardarEnStorage(vigentes);
-        }
+      const notasGuardadas: Nota[] = datosJson !== null ? JSON.parse(datosJson) : [];
+      const vigentes = notasGuardadas.filter(n => !notaExpirada(n));
+      setNotas(vigentes);
+      // Se marca aquí, de forma síncrona, y no dentro de un setState: así ninguna acción del
+      // usuario que dispare guardarEnStorage justo después puede colarse antes de que el cerrojo
+      // esté activado (ver comentario junto a la declaración del ref).
+      notasCargadasDeVerdad.current = true;
+      if (vigentes.length !== notasGuardadas.length) {
+        guardarEnStorage(vigentes);
       }
     } catch (error) {
       console.error('Error al cargar notas del almacenamiento local:', error);
+      // Deliberadamente NO se marca notasCargadasDeVerdad como true: no sabemos qué había
+      // guardado, así que hasta que el usuario reintente y funcione, cualquier guardado queda
+      // bloqueado para no arriesgarse a sobrescribir notas que no se han podido leer todavía.
+      setErrorAlCargar(
+        'No se han podido cargar tus notas guardadas en este dispositivo. Para evitar borrar algo por error, no se guardará ningún cambio hasta que se solucione.'
+      );
     } finally {
       setCargando(false);
     }
@@ -256,11 +274,21 @@ function PantallaPrincipal() {
 
   // 2. GUARDAR EL ARRAY DE NOTAS EN EL MÓVIL
   const guardarEnStorage = async (nuevasNotas: Nota[]) => {
+    if (!notasCargadasDeVerdad.current) {
+      // No debería poder llegar aquí (la UI que dispara guardados está bloqueada mientras se
+      // carga), pero si ocurre, es preferible no escribir nada a arriesgarse a borrar notas.
+      console.error('Se ha intentado guardar antes de terminar de cargar las notas existentes; guardado cancelado.');
+      return;
+    }
     try {
       const datosJson = JSON.stringify(nuevasNotas);
       await AsyncStorage.setItem(CLAVE_STORAGE, datosJson);
     } catch (error) {
       console.error('Error al guardar notas en el almacenamiento local:', error);
+      Alert.alert(
+        'Error al guardar',
+        'No se han podido guardar los cambios en este dispositivo. Puede que se pierdan si cierras la app ahora — vuelve a intentarlo.'
+      );
     }
   };
 
@@ -317,8 +345,9 @@ function PantallaPrincipal() {
     salCifrado?: string;
     notaCompartidaId?: string;
     esCreador?: boolean;
+    esFavorita?: boolean;
   }) => {
-    const { titulo, contenido, esCompartida, expiraEn, pinAcceso, salCifrado, notaCompartidaId, esCreador } = datos;
+    const { titulo, contenido, esCompartida, expiraEn, pinAcceso, salCifrado, notaCompartidaId, esCreador, esFavorita } = datos;
 
     if (!titulo.trim() && contenidoVacio(contenido)) {
       setModalVisible(false);
@@ -338,6 +367,7 @@ function PantallaPrincipal() {
         notaCompartidaId: esCompartida ? notaCompartidaId : undefined,
         esCreador: esCompartida ? esCreador : undefined,
         expiraEn,
+        esFavorita,
       } : n);
     } else {
       const nuevaNota: Nota = {
@@ -351,6 +381,7 @@ function PantallaPrincipal() {
         esCreador: esCompartida ? esCreador : undefined,
         fecha: new Date().toLocaleDateString('es-ES', { day: 'numeric', month: 'short' }),
         expiraEn,
+        esFavorita,
       };
       notasActualizadas = [nuevaNota, ...notas];
     }
@@ -397,6 +428,23 @@ function PantallaPrincipal() {
     setModalVisible(false);
   };
 
+  // Mientras no se sepa con certeza qué había guardado, no se muestra la app normal (con el
+  // botón de crear notas y demás): así es físicamente imposible escribir encima de notas que no
+  // se han podido leer todavía.
+  if (errorAlCargar) {
+    return (
+      <SafeAreaView style={[styles.container, styles.errorCargaContainer]} edges={['top', 'left', 'right']}>
+        <StatusBar barStyle="light-content" backgroundColor={tema.fondo} />
+        <Feather name="alert-triangle" size={40} color="#ff4444" />
+        <Text style={styles.errorCargaTitulo}>No se han podido cargar tus notas</Text>
+        <Text style={styles.errorCargaTexto}>{errorAlCargar}</Text>
+        <TouchableOpacity style={styles.errorCargaBoton} onPress={cargarNotasGuardadas}>
+          <Text style={styles.errorCargaBotonTexto}>Reintentar</Text>
+        </TouchableOpacity>
+      </SafeAreaView>
+    );
+  }
+
   return (
     <SafeAreaView style={styles.container} edges={['top', 'left', 'right']}>
       <StatusBar barStyle="light-content" backgroundColor={tema.fondo} />
@@ -405,13 +453,17 @@ function PantallaPrincipal() {
       <View style={styles.header}>
         <View style={{ flex: 1 }}>
           <Text style={styles.headerTitle}>
-            {filtro === 'compartidas' ? 'Notas compartidas' : filtro === 'locales' ? 'Notas Locales' : 'Budgie Notes'}
+            {filtro === 'compartidas' ? 'Notas compartidas' : filtro === 'locales' ? 'Notas Locales' : filtro === 'autodestructivas' ? 'Notas temporales' : filtro === 'favoritas' ? 'Notas favoritas' : 'Budgie Notes' }
           </Text>
           <Text style={styles.headerSubtitle}>
             {cargando ? 'Cargando...' : `${notasVisibles.length} notas guardadas`}
           </Text>
         </View>
-        <TouchableOpacity style={styles.botonUnirse} onPress={() => setMostrarUnirse(true)}>
+        <TouchableOpacity
+          style={[styles.botonUnirse, cargando && styles.botonDeshabilitado]}
+          onPress={() => setMostrarUnirse(true)}
+          disabled={cargando}
+        >
           <Feather name="user-plus" size={20} color={tema.textoIcono} />
         </TouchableOpacity>
         <TouchableOpacity style={[styles.botonUnirse, styles.botonTema]} onPress={alternarTema}>
@@ -510,9 +562,14 @@ function PantallaPrincipal() {
 
       {/* Botón Flotante */}
       <TouchableOpacity
-        style={[styles.fab, { bottom: ALTO_BASE_BARRA_INFERIOR + insets.bottom + 16 }]}
+        style={[
+          styles.fab,
+          { bottom: ALTO_BASE_BARRA_INFERIOR + insets.bottom + 16 },
+          cargando && styles.botonDeshabilitado,
+        ]}
         activeOpacity={0.8}
         onPress={abrirCreador}
+        disabled={cargando}
       >
         <Feather name="plus" size={26} color="#ffffff" />
       </TouchableOpacity>
@@ -539,6 +596,11 @@ function PantallaPrincipal() {
           <TouchableOpacity style={styles.barraBoton} onPress={() => alternarFiltro('autodestructivas')}>
             <Feather name="clock" size={20} color={filtro === 'autodestructivas' ? '#ff6b00' : tema.textoIcono} />
             <Text style={[styles.barraTexto, filtro === 'autodestructivas' && styles.barraTextoActivo]}>Temporales</Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity style={styles.barraBoton} onPress={() => alternarFiltro('favoritas')}>
+            <Feather name="star" size={20} color={filtro === 'favoritas' ? '#ff6b00' : tema.textoIcono} />
+            <Text style={[styles.barraTexto, filtro === 'favoritas' && styles.barraTextoActivo]}>Favoritas</Text>
           </TouchableOpacity>
         </View>
 
@@ -623,6 +685,7 @@ function ModalEditorNota({
     salCifrado?: string;
     notaCompartidaId?: string;
     esCreador?: boolean;
+    esFavorita?: boolean;
   }) => void;
   onDelete: () => void;
 }) {
@@ -630,6 +693,7 @@ function ModalEditorNota({
   const styles = useMemo(() => crearEstilos(tema), [tema]);
   const [tituloInput, setTituloInput] = useState(nota?.titulo ?? '');
   const [esCompartidaInput, setEsCompartidaInput] = useState(nota?.esCompartida ?? false);
+  const [favoritaInput, setFavoritaInput] = useState(nota?.esFavorita ?? false);
   const [pinInput, setPinInput] = useState(nota?.pinAcceso);
   const [salInput, setSalInput] = useState(nota?.salCifrado);
   const [nombreCreadorInput, setNombreCreadorInput] = useState('');
@@ -754,7 +818,7 @@ function ModalEditorNota({
         }
       }
 
-      onSave({ titulo: tituloInput, contenido, esCompartida: esCompartidaInput, expiraEn: expiraEnInput });
+      onSave({ titulo: tituloInput, contenido, esCompartida: esCompartidaInput, expiraEn: expiraEnInput, esFavorita: favoritaInput });
       return;
     }
 
@@ -793,6 +857,7 @@ function ModalEditorNota({
         salCifrado: salInput,
         notaCompartidaId,
         esCreador,
+        esFavorita: favoritaInput,
       });
     } catch (error) {
       if (error instanceof ConflictoEdicionError) {
@@ -988,13 +1053,22 @@ function ModalEditorNota({
         >
           <View ref={refContenidoEditor} style={{ flex: 1, paddingBottom: alturaTeclado }}>
           <View style={styles.editorBody}>
-            <TextInput
-              style={styles.inputTitulo}
-              placeholder="Título"
-              placeholderTextColor={tema.textoTerciario}
-              value={tituloInput}
-              onChangeText={setTituloInput}
-            />
+            <View style={styles.filaTitulo}>
+              <TextInput
+                style={[styles.inputTitulo, { flex: 1 }]}
+                placeholder="Título"
+                placeholderTextColor={tema.textoTerciario}
+                value={tituloInput}
+                onChangeText={setTituloInput}
+              />
+              <TouchableOpacity
+                onPress={() => setFavoritaInput(v => !v)}
+                hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                style={styles.botonFavorita}
+              >
+                <Feather name="star" size={14} color={favoritaInput ? '#ff6b00' : tema.textoIcono} />
+              </TouchableOpacity>
+            </View>
 
             <RichText editor={editor} />
           </View>
@@ -1073,6 +1147,12 @@ function ModalEditorNota({
 
 const crearEstilos = (t: Tema) => StyleSheet.create({
   container: { flex: 1, backgroundColor: t.fondo },
+  botonDeshabilitado: { opacity: 0.4 },
+  errorCargaContainer: { justifyContent: 'center', alignItems: 'center', padding: 30 },
+  errorCargaTitulo: { color: '#fff', fontSize: 17, fontWeight: '700', marginTop: 16, textAlign: 'center' },
+  errorCargaTexto: { color: t.textoSecundarioAlt, fontSize: 13, marginTop: 8, textAlign: 'center', lineHeight: 19 },
+  errorCargaBoton: { backgroundColor: '#ff6b00', borderRadius: 8, paddingVertical: 12, paddingHorizontal: 28, marginTop: 24 },
+  errorCargaBotonTexto: { color: t.fondo, fontWeight: '700', fontSize: 15 },
   header: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -1261,7 +1341,9 @@ const crearEstilos = (t: Tema) => StyleSheet.create({
   },
 
   editorBody: { flex: 1, marginTop: 15, paddingHorizontal: 20 },
-  inputTitulo: { fontSize: 22, fontWeight: '700', color: '#ff6b00', marginBottom: 15 },
+  filaTitulo: { flexDirection: 'row', alignItems: 'center', marginBottom: 15 },
+  inputTitulo: { fontSize: 22, fontWeight: '700', color: '#ff6b00' },
+  botonFavorita: { marginLeft: 8, padding: 2 },
 
   toolbar: {
     height: 44,

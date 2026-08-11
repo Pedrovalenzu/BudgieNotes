@@ -10,4 +10,5 @@ export interface Nota {
   ultimaEdicionConocida?: string | null; // editado_en visto la última vez que se descargó (detecta conflictos al guardar)
   fecha: string;
   expiraEn?: number; // timestamp (ms); pasado ese momento la nota se autodestruye
+  esFavorita?: boolean;
 }
