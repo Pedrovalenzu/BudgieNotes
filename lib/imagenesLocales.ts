@@ -2,6 +2,12 @@ import { Directory, File, Paths } from 'expo-file-system';
 
 const NOMBRE_CARPETA = 'imagenes-notas';
 
+// Directorio base (file://...) donde vive `imagenes-notas/`. El editor (WebView) necesita
+// cargarse con esta URI como baseUrl para poder resolver los <img src="file://..."> que
+// apuntan a esas imágenes: sin un origen file:// coincidente, el WebView las bloquea y solo
+// se ve el icono de imagen rota.
+export const uriCarpetaDocumentos = Paths.document.uri;
+
 const carpetaImagenes = (): Directory => {
   const carpeta = new Directory(Paths.document, NOMBRE_CARPETA);
   if (!carpeta.exists) carpeta.create({ intermediates: true, idempotent: true });

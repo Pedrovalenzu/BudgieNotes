@@ -35,7 +35,7 @@ import {
   unirseANotaPorPin,
 } from './lib/notasCompartidas';
 import { mensajeDeError } from './lib/errores';
-import { borrarImagenesLocalesDeNota, moverImagenesEmbebidasAArchivos } from './lib/imagenesLocales';
+import { borrarImagenesLocalesDeNota, moverImagenesEmbebidasAArchivos, uriCarpetaDocumentos } from './lib/imagenesLocales';
 import { Nota } from './types';
 import { Tema } from './lib/tema';
 import { TemaProvider, useTema } from './lib/TemaContext';
@@ -807,6 +807,7 @@ function ModalEditorNota({
   const editor = useEditorBridge({
     initialContent: nota?.contenido || '',
     avoidIosKeyboard: true,
+    webviewBaseURL: uriCarpetaDocumentos,
     theme: { webview: { backgroundColor: tema.fondo } },
     bridgeExtensions: [
       ...TenTapStartKit,
@@ -1158,7 +1159,13 @@ function ModalEditorNota({
               </TouchableOpacity>
             </View>
 
-            <RichText editor={editor} />
+            <RichText
+              editor={editor}
+              allowFileAccess
+              allowFileAccessFromFileURLs
+              allowUniversalAccessFromFileURLs
+              allowingReadAccessToURL={uriCarpetaDocumentos}
+            />
           </View>
 
           {/* Barra de herramientas */}
