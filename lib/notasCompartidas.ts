@@ -173,11 +173,12 @@ export const guardarNotaCompartida = async (datos: {
   ultimaEdicionConocida?: string | null;
   // Ignora la comprobación anterior y sobrescribe de todas formas (elegido por el usuario tras un conflicto).
   forzar?: boolean;
-}): Promise<void> => {
+}): Promise<string> => {
   const cliente = requerirSupabase();
   const usuarioId = await asegurarSesionAnonima();
   const tituloCifrado = cifrarTexto(datos.clave, datos.titulo);
   const contenidoCifrado = await cifrarContenidoNota(datos.contenidoHtml, datos.clave);
+  const editadoEn = new Date().toISOString();
 
   let consulta = cliente
     .from('notas_compartidas')
@@ -185,7 +186,7 @@ export const guardarNotaCompartida = async (datos: {
       titulo_cifrado: tituloCifrado,
       contenido_cifrado: contenidoCifrado,
       editado_por: usuarioId,
-      editado_en: new Date().toISOString(),
+      editado_en: editadoEn,
     })
     .eq('id', datos.notaId);
 
@@ -200,7 +201,10 @@ export const guardarNotaCompartida = async (datos: {
   // vuelta el id actualizado y comprobamos que de verdad haya una fila, en vez de asumir éxito.
   const { data, error } = await consulta.select('id');
   if (error) throw error;
-  if (data && data.length > 0) return;
+  // Se devuelve el `editado_en` que se acaba de escribir: quien llama (el autoguardado) lo
+  // necesita como `ultimaEdicionConocida` del siguiente guardado, para no auto-generarse un
+  // conflicto contra su propio guardado anterior.
+  if (data && data.length > 0) return editadoEn;
 
   // 0 filas: miramos el estado actual para saber si fue un conflicto (alguien guardó antes que
   // nosotros) o falta de permiso de escritura.

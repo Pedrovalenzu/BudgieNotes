@@ -408,8 +408,13 @@ function PantallaPrincipal() {
     setModalVisible(true);
   };
 
-  // 3. GUARDAR CAMBIOS (CREAR / EDITAR / ELIMINAR)
+  // 3. GUARDAR CAMBIOS (CREAR / EDITAR) — llamado tanto por el autoguardado (con el modal todavía
+  // abierto) como al salir del editor, así que NUNCA cierra el modal por su cuenta: eso lo decide
+  // quien llama (ver `salir()` en ModalEditorNota). Identifica la nota por `id` (generado y
+  // reutilizado por el propio editor durante toda la sesión) en vez de por `notaSeleccionada`, para
+  // que el primer autoguardado de una nota nueva y los siguientes actualicen la misma fila.
   const guardarNota = (datos: {
+    id: string;
     titulo: string;
     contenido: string;
     esCompartida: boolean;
@@ -419,49 +424,58 @@ function PantallaPrincipal() {
     notaCompartidaId?: string;
     esCreador?: boolean;
     esFavorita?: boolean;
+    ultimaEdicionConocida?: string | null;
   }) => {
-    const { titulo, contenido, esCompartida, expiraEn, pinAcceso, salCifrado, notaCompartidaId, esCreador, esFavorita } = datos;
+    const { id, titulo, contenido, esCompartida, expiraEn, pinAcceso, salCifrado, notaCompartidaId, esCreador, esFavorita, ultimaEdicionConocida } = datos;
 
-    if (!titulo.trim() && contenidoVacio(contenido)) {
-      setModalVisible(false);
-      return;
-    }
+    setNotas(prev => {
+      const existente = prev.find(n => n.id === id);
+      const notasActualizadas = existente
+        ? prev.map(n => n.id === id ? {
+            ...n,
+            titulo,
+            contenido,
+            esCompartida,
+            pinAcceso: esCompartida ? pinAcceso : undefined,
+            salCifrado: esCompartida ? salCifrado : undefined,
+            notaCompartidaId: esCompartida ? notaCompartidaId : undefined,
+            esCreador: esCompartida ? esCreador : undefined,
+            ultimaEdicionConocida: esCompartida ? ultimaEdicionConocida : undefined,
+            expiraEn,
+            esFavorita,
+          } : n)
+        : [{
+            id,
+            titulo: titulo || 'Sin título',
+            contenido,
+            esCompartida,
+            pinAcceso: esCompartida ? pinAcceso : undefined,
+            salCifrado: esCompartida ? salCifrado : undefined,
+            notaCompartidaId: esCompartida ? notaCompartidaId : undefined,
+            esCreador: esCompartida ? esCreador : undefined,
+            ultimaEdicionConocida: esCompartida ? ultimaEdicionConocida : undefined,
+            fecha: new Date().toLocaleDateString('es-ES', { day: 'numeric', month: 'short' }),
+            expiraEn,
+            esFavorita,
+          } as Nota, ...prev];
 
-    let notasActualizadas: Nota[];
+      guardarEnStorage(notasActualizadas);
+      return notasActualizadas;
+    });
+  };
 
-    if (notaSeleccionada) {
-      notasActualizadas = notas.map(n => n.id === notaSeleccionada.id ? {
-        ...n,
-        titulo,
-        contenido,
-        esCompartida,
-        pinAcceso: esCompartida ? pinAcceso : undefined,
-        salCifrado: esCompartida ? salCifrado : undefined,
-        notaCompartidaId: esCompartida ? notaCompartidaId : undefined,
-        esCreador: esCompartida ? esCreador : undefined,
-        expiraEn,
-        esFavorita,
-      } : n);
-    } else {
-      const nuevaNota: Nota = {
-        id: Date.now().toString(),
-        titulo: titulo || 'Sin título',
-        contenido,
-        esCompartida,
-        pinAcceso: esCompartida ? pinAcceso : undefined,
-        salCifrado: esCompartida ? salCifrado : undefined,
-        notaCompartidaId: esCompartida ? notaCompartidaId : undefined,
-        esCreador: esCompartida ? esCreador : undefined,
-        fecha: new Date().toLocaleDateString('es-ES', { day: 'numeric', month: 'short' }),
-        expiraEn,
-        esFavorita,
-      };
-      notasActualizadas = [nuevaNota, ...notas];
-    }
-
-    setNotas(notasActualizadas);
-    guardarEnStorage(notasActualizadas);
-    setModalVisible(false);
+  // Se llama cuando el editor se cierra con la nota vacía (título y contenido) DESPUÉS de que el
+  // autoguardado ya la hubiera creado en algún momento de la sesión (p. ej. se escribió algo y
+  // luego se borró todo): borra ese borrador para que no quede una nota vacía en la lista. Solo se
+  // usa con ids creados en la propia sesión de edición, así que nunca puede borrar por error una
+  // nota que ya existiera de antes.
+  const descartarBorrador = (id: string) => {
+    setNotas(prev => {
+      if (!prev.some(n => n.id === id)) return prev;
+      const notasActualizadas = prev.filter(n => n.id !== id);
+      guardarEnStorage(notasActualizadas);
+      return notasActualizadas;
+    });
   };
 
   // Se llama cuando ModalUnirseNota termina de unirse y descargar la nota: se añade a la lista local
@@ -694,6 +708,7 @@ function PantallaPrincipal() {
         nota={notaSeleccionada}
         onClose={() => setModalVisible(false)}
         onSave={guardarNota}
+        onDiscardDraft={descartarBorrador}
         onDelete={borrarNota}
       />
 
@@ -746,12 +761,14 @@ function ModalEditorNota({
   nota,
   onClose,
   onSave,
+  onDiscardDraft,
   onDelete,
 }: {
   visible: boolean;
   nota: Nota | null;
   onClose: () => void;
   onSave: (datos: {
+    id: string;
     titulo: string;
     contenido: string;
     esCompartida: boolean;
@@ -761,7 +778,9 @@ function ModalEditorNota({
     notaCompartidaId?: string;
     esCreador?: boolean;
     esFavorita?: boolean;
+    ultimaEdicionConocida?: string | null;
   }) => void;
+  onDiscardDraft: (id: string) => void;
   onDelete: () => void;
 }) {
   const { tema } = useTema();
@@ -779,6 +798,43 @@ function ModalEditorNota({
   const [guardando, setGuardando] = useState(false);
   const [conflicto, setConflicto] = useState<ConflictoEdicionError | null>(null);
   const insets = useSafeAreaInsets();
+
+  // --- Autoguardado ---
+  // Id estable para toda la sesión de edición: si la nota es nueva se genera aquí una sola vez y
+  // se reutiliza en todos los guardados posteriores (el padre identifica la nota por este id, no
+  // por `notaSeleccionada`), para que el primer autoguardado y los siguientes actualicen la misma fila.
+  const idNotaRef = useRef(nota?.id ?? Date.now().toString());
+  // Si la nota ya existía al abrir el editor. No cambia durante la sesión: el componente entero se
+  // remonta (ver `key={editorSession}` en PantallaPrincipal) cada vez que se abre otra nota.
+  const existiaAlAbrirRef = useRef(!!nota);
+  // A true la primera vez que el autoguardado llega a crear de verdad una nota nueva (nunca para
+  // una que ya existiera). Si al salir se queda vacía, indica si hay un borrador que descartar.
+  const creadaEnSesionRef = useRef(false);
+  // Solo true cuando hay algo de verdad que persistir, para no disparar un guardado (y, en una nota
+  // compartida, una petición a Supabase) al abrir una nota y salir sin haberla tocado.
+  const cambiosSinGuardarRef = useRef(false);
+  const timeoutAutoguardadoRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const guardadoEnCursoRef = useRef(false);
+  // Identificadores de la nota compartida en Supabase: arrancan con lo que traía `nota`, pero a
+  // partir de ahí los mantiene el propio guardado, no `nota` (que se queda congelado con los datos
+  // de cuando se abrió el editor) — si no, cada ciclo de autoguardado volvería a crear una nota
+  // compartida nueva en Supabase en vez de actualizar la que ya se creó en el primero.
+  const [notaCompartidaIdInput, setNotaCompartidaIdInput] = useState(nota?.notaCompartidaId);
+  const [esCreadorInput, setEsCreadorInput] = useState(nota?.esCreador ?? true);
+  const [ultimaEdicionConocidaInput, setUltimaEdicionConocidaInput] = useState<string | null>(nota?.ultimaEdicionConocida ?? null);
+
+  // Cancela cualquier autoguardado pendiente en cuanto el modal deja de estar visible (borrado
+  // confirmado, conflicto descartado, etc.) o al desmontar — si no, podría dispararse más tarde
+  // sobre una nota que ya no existe y resucitarla sin querer.
+  useEffect(() => {
+    if (!visible && timeoutAutoguardadoRef.current) {
+      clearTimeout(timeoutAutoguardadoRef.current);
+      timeoutAutoguardadoRef.current = null;
+    }
+  }, [visible]);
+  useEffect(() => () => {
+    if (timeoutAutoguardadoRef.current) clearTimeout(timeoutAutoguardadoRef.current);
+  }, []);
 
   // En Android, adjustPan ya desplaza algo la ventana al mostrarse el teclado (aunque el foco
   // esté dentro del WebView del editor, no en un EditText nativo), pero no lo suficiente para
@@ -809,6 +865,7 @@ function ModalEditorNota({
     avoidIosKeyboard: true,
     webviewBaseURL: uriCarpetaDocumentos,
     theme: { webview: { backgroundColor: tema.fondo } },
+    onChange: () => dispararAutoguardado(),
     bridgeExtensions: [
       ...TenTapStartKit,
       crearBridgeTema(tema),
@@ -831,7 +888,24 @@ function ModalEditorNota({
     setTimeout(() => setPinCopiado(false), 2000);
   };
 
+  const marcarCambio = () => {
+    cambiosSinGuardarRef.current = true;
+  };
+
+  // Autoguardado con "debounce": se dispara con cada pulsación (título o contenido) pero solo
+  // llega a guardar de verdad 700ms después de la última, para no lanzar un guardado — y, en una
+  // nota compartida, una petición a Supabase — en cada tecla.
+  const dispararAutoguardado = () => {
+    marcarCambio();
+    if (timeoutAutoguardadoRef.current) clearTimeout(timeoutAutoguardadoRef.current);
+    timeoutAutoguardadoRef.current = setTimeout(() => {
+      timeoutAutoguardadoRef.current = null;
+      guardar(false, false);
+    }, 700);
+  };
+
   const alternarCompartida = async () => {
+    marcarCambio();
     const nuevoValor = !esCompartidaInput;
     setEsCompartidaInput(nuevoValor);
     if (nuevoValor && !pinInput) {
@@ -842,11 +916,13 @@ function ModalEditorNota({
   };
 
   const elegirDuracion = (horas: number) => {
+    marcarCambio();
     setExpiraEnInput(Date.now() + horas * 60 * 60 * 1000);
     setMostrarOpcionesCaducidad(false);
   };
 
   const quitarCaducidad = () => {
+    marcarCambio();
     setExpiraEnInput(undefined);
     setMostrarOpcionesCaducidad(false);
   };
@@ -867,11 +943,20 @@ function ModalEditorNota({
 
     const mime = imagen.mimeType || 'image/jpeg';
     editor.setImage(`data:${mime};base64,${imagen.base64}`);
+    dispararAutoguardado();
     // Para notas compartidas, cifrarContenidoNota() se encarga de subir esta imagen a Storage
     // (cifrada) y sustituir este data URI por su URL cuando la nota se envíe a Supabase.
   };
 
-  const guardar = async (forzar: boolean = false) => {
+  // Guarda de verdad (local y/o Supabase). Lo llaman tanto el autoguardado con debounce (con el
+  // modal todavía abierto, `mostrarSpinner=false` para no hacer parpadear el botón "Guardar" en
+  // cada ciclo) como `salir()` al pulsar atrás o el botón "Guardar". Devuelve `false` cuando NO se
+  // ha llegado a cerrar el ciclo de guardado (conflicto pendiente, error, o guardado ya en curso) —
+  // quien llama lo usa para decidir si es seguro cerrar el editor.
+  const guardar = async (forzar: boolean = false, mostrarSpinner: boolean = true): Promise<boolean> => {
+    if (!cambiosSinGuardarRef.current) return true; // nada que guardar (se ha abierto y cerrado sin tocar nada)
+    if (guardadoEnCursoRef.current) return false; // ya hay un guardado en marcha; el próximo autoguardado recogerá lo último
+
     const contenido = await editor.getHTML();
     // Lo que se guarda en AsyncStorage nunca lleva imágenes embebidas en base64: cada nota se
     // guarda junto a todas las demás bajo una sola clave, y AsyncStorage en Android usa SQLite,
@@ -880,93 +965,140 @@ function ModalEditorNota({
     // imágenes se mueven a archivos aparte y en el HTML solo queda su ruta local (ver
     // lib/imagenesLocales.ts). El envío a Supabase (más abajo) sigue usando el base64 original.
     const contenidoParaGuardarLocal = moverImagenesEmbebidasAArchivos(contenido);
+    const vacia = !tituloInput.trim() && contenidoVacio(contenido);
 
-    if (!esCompartidaInput || !pinInput || !salInput) {
-      // Se acaba de desactivar "Compartida" en una nota que sí llegó a existir en Supabase:
-      // salir/borrar en la nube antes de dejarla como solo local. Best-effort — si falla por no
-      // haber red, se desmarca igualmente en el dispositivo en vez de bloquear al usuario.
-      if (nota?.notaCompartidaId) {
-        try {
-          if (nota.esCreador) {
-            await borrarNotaCompartidaDelServidor(nota.notaCompartidaId);
-          } else {
-            await salirDeNotaCompartida(nota.notaCompartidaId);
-          }
-        } catch (error) {
-          console.error('Error al salir de la nota compartida en Supabase:', error);
-          Alert.alert(
-            'Aviso',
-            'No se ha podido avisar a la nube de que has dejado de compartir esta nota (puede que siga apareciendo para otros). Se ha desmarcado igualmente en este dispositivo.'
-          );
-        }
+    if (vacia) {
+      // Nunca se guarda una nota vacía. Si el autoguardado ya había llegado a crearla en algún
+      // momento de esta sesión (se escribió algo y luego se borró todo), se descarta ese borrador
+      // en vez de dejarlo huérfano en la lista.
+      if (!existiaAlAbrirRef.current && creadaEnSesionRef.current) {
+        onDiscardDraft(idNotaRef.current);
+        creadaEnSesionRef.current = false;
       }
-
-      onSave({
-        titulo: tituloInput,
-        contenido: contenidoParaGuardarLocal,
-        esCompartida: esCompartidaInput,
-        expiraEn: expiraEnInput,
-        esFavorita: favoritaInput,
-      });
-      return;
+      cambiosSinGuardarRef.current = false;
+      return true;
     }
 
-    setGuardando(true);
+    guardadoEnCursoRef.current = true;
     try {
-      const clave = await derivarClaveDesdePin(pinInput, salInput);
-      let notaCompartidaId = nota?.notaCompartidaId;
-      let esCreador = nota?.esCreador ?? true;
+      if (!esCompartidaInput || !pinInput || !salInput) {
+        // Se acaba de desactivar "Compartida" en una nota que sí llegó a existir en Supabase:
+        // salir/borrar en la nube antes de dejarla como solo local. Best-effort — si falla por no
+        // haber red, se desmarca igualmente en el dispositivo en vez de bloquear al usuario.
+        if (notaCompartidaIdInput) {
+          try {
+            if (esCreadorInput) {
+              await borrarNotaCompartidaDelServidor(notaCompartidaIdInput);
+            } else {
+              await salirDeNotaCompartida(notaCompartidaIdInput);
+            }
+          } catch (error) {
+            console.error('Error al salir de la nota compartida en Supabase:', error);
+            Alert.alert(
+              'Aviso',
+              'No se ha podido avisar a la nube de que has dejado de compartir esta nota (puede que siga apareciendo para otros). Se ha desmarcado igualmente en este dispositivo.'
+            );
+          }
+          setNotaCompartidaIdInput(undefined);
+          setUltimaEdicionConocidaInput(null);
+        }
 
-      if (notaCompartidaId) {
-        await guardarNotaCompartida({
-          notaId: notaCompartidaId,
+        onSave({
+          id: idNotaRef.current,
           titulo: tituloInput,
-          contenidoHtml: contenido,
-          clave,
-          ultimaEdicionConocida: nota?.ultimaEdicionConocida ?? null,
-          forzar,
+          contenido: contenidoParaGuardarLocal,
+          esCompartida: esCompartidaInput,
+          expiraEn: expiraEnInput,
+          esFavorita: favoritaInput,
         });
-      } else {
-        notaCompartidaId = await crearNotaCompartida({
-          pin: pinInput,
+        creadaEnSesionRef.current = true;
+        cambiosSinGuardarRef.current = false;
+        return true;
+      }
+
+      if (mostrarSpinner) setGuardando(true);
+      try {
+        const clave = await derivarClaveDesdePin(pinInput, salInput);
+        let notaCompartidaId = notaCompartidaIdInput;
+        let esCreador = esCreadorInput;
+        let nuevaUltimaEdicion = ultimaEdicionConocidaInput;
+
+        if (notaCompartidaId) {
+          nuevaUltimaEdicion = await guardarNotaCompartida({
+            notaId: notaCompartidaId,
+            titulo: tituloInput,
+            contenidoHtml: contenido,
+            clave,
+            ultimaEdicionConocida: ultimaEdicionConocidaInput,
+            forzar,
+          });
+        } else {
+          notaCompartidaId = await crearNotaCompartida({
+            pin: pinInput,
+            salCifrado: salInput,
+            titulo: tituloInput,
+            contenidoHtml: contenido,
+            nombreCreador: nombreCreadorInput.trim() || 'Yo',
+          });
+          esCreador = true;
+          nuevaUltimaEdicion = null;
+        }
+
+        setNotaCompartidaIdInput(notaCompartidaId);
+        setEsCreadorInput(esCreador);
+        setUltimaEdicionConocidaInput(nuevaUltimaEdicion);
+
+        onSave({
+          id: idNotaRef.current,
+          titulo: tituloInput,
+          contenido: contenidoParaGuardarLocal,
+          esCompartida: true,
+          expiraEn: expiraEnInput,
+          pinAcceso: pinInput,
           salCifrado: salInput,
-          titulo: tituloInput,
-          contenidoHtml: contenido,
-          nombreCreador: nombreCreadorInput.trim() || 'Yo',
+          notaCompartidaId,
+          esCreador,
+          esFavorita: favoritaInput,
+          ultimaEdicionConocida: nuevaUltimaEdicion,
         });
-        esCreador = true;
+        creadaEnSesionRef.current = true;
+        cambiosSinGuardarRef.current = false;
+        return true;
+      } catch (error) {
+        if (error instanceof ConflictoEdicionError) {
+          setConflicto(error);
+          return false;
+        }
+        console.error('Error al guardar la nota compartida en Supabase:', error);
+        Alert.alert('Error al guardar', mensajeDeError(error, 'No se ha podido guardar en la nube.'));
+        return false;
+      } finally {
+        if (mostrarSpinner) setGuardando(false);
       }
-
-      onSave({
-        titulo: tituloInput,
-        contenido: contenidoParaGuardarLocal,
-        esCompartida: true,
-        expiraEn: expiraEnInput,
-        pinAcceso: pinInput,
-        salCifrado: salInput,
-        notaCompartidaId,
-        esCreador,
-        esFavorita: favoritaInput,
-      });
-    } catch (error) {
-      if (error instanceof ConflictoEdicionError) {
-        setConflicto(error);
-        return;
-      }
-      console.error('Error al guardar la nota compartida en Supabase:', error);
-      Alert.alert('Error al guardar', mensajeDeError(error, 'No se ha podido guardar en la nube.'));
     } finally {
-      setGuardando(false);
+      guardadoEnCursoRef.current = false;
     }
   };
 
+  // Guarda (si hace falta) y cierra el editor — usado al pulsar atrás, el botón "Guardar" y el
+  // botón físico/gesto de atrás. Si el guardado no llega a completarse (p. ej. surge un conflicto
+  // de edición), el editor se queda abierto para que el usuario decida qué hacer.
+  const salir = async () => {
+    if (timeoutAutoguardadoRef.current) {
+      clearTimeout(timeoutAutoguardadoRef.current);
+      timeoutAutoguardadoRef.current = null;
+    }
+    const guardadoOk = await guardar();
+    if (guardadoOk) onClose();
+  };
+
   return (
-    <Modal visible={visible} animationType="slide" transparent={false} onRequestClose={onClose}>
+    <Modal visible={visible} animationType="slide" transparent={false} onRequestClose={salir}>
       <SafeAreaView style={styles.modalContainer}>
 
         {/* Barra superior */}
         <View style={styles.modalHeader}>
-          <TouchableOpacity onPress={onClose} style={styles.botonIcono}>
+          <TouchableOpacity onPress={salir} style={styles.botonIcono}>
             <Feather name="arrow-left" size={22} color={tema.textoIcono} />
           </TouchableOpacity>
 
@@ -989,7 +1121,7 @@ function ModalEditorNota({
             <TouchableOpacity onPress={() => setMostrarOpcionesCaducidad(true)} style={styles.botonBorrar}>
               <Feather name="clock" size={20} color={expiraEnInput !== undefined ? '#ff6b00' : tema.textoIcono} />
             </TouchableOpacity>
-            {esCompartidaInput && nota?.esCreador && nota?.notaCompartidaId && (
+            {esCompartidaInput && esCreadorInput && notaCompartidaIdInput && (
               <TouchableOpacity onPress={() => setMostrarParticipantes(true)} style={styles.botonBorrar}>
                 <Feather name="users" size={20} color={tema.textoIcono} />
               </TouchableOpacity>
@@ -999,7 +1131,7 @@ function ModalEditorNota({
                 <Feather name="trash-2" size={20} color="#ff4444" />
               </TouchableOpacity>
             )}
-            <TouchableOpacity onPress={guardando ? undefined : () => guardar()} disabled={guardando}>
+            <TouchableOpacity onPress={guardando ? undefined : salir} disabled={guardando}>
               {guardando ? (
                 <ActivityIndicator color="#ff6b00" />
               ) : (
@@ -1036,7 +1168,7 @@ function ModalEditorNota({
         )}
 
         {/* Nombre del creador: solo hace falta la primera vez que se comparte (aún no existe en Supabase) */}
-        {esCompartidaInput && !nota?.notaCompartidaId && (
+        {esCompartidaInput && !notaCompartidaIdInput && (
           <TextInput
             style={styles.inputNombreCreador}
             placeholder="Tu nombre (se lo verán los demás)"
@@ -1114,9 +1246,10 @@ function ModalEditorNota({
 
               <TouchableOpacity
                 style={styles.opcionFila}
-                onPress={() => {
+                onPress={async () => {
                   setConflicto(null);
-                  guardar(true);
+                  const guardadoOk = await guardar(true);
+                  if (guardadoOk) onClose();
                 }}
               >
                 <Text style={[styles.opcionTexto, styles.opcionTextoDestacado]}>Sobrescribir con los míos</Text>
@@ -1148,10 +1281,16 @@ function ModalEditorNota({
                 placeholder="Título"
                 placeholderTextColor={tema.textoTerciario}
                 value={tituloInput}
-                onChangeText={setTituloInput}
+                onChangeText={texto => {
+                  setTituloInput(texto);
+                  dispararAutoguardado();
+                }}
               />
               <TouchableOpacity
-                onPress={() => setFavoritaInput(v => !v)}
+                onPress={() => {
+                  marcarCambio();
+                  setFavoritaInput(v => !v);
+                }}
                 hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
                 style={styles.botonFavorita}
               >
@@ -1233,7 +1372,7 @@ function ModalEditorNota({
 
       <ModalParticipantes
         visible={mostrarParticipantes}
-        notaCompartidaId={nota?.notaCompartidaId ?? null}
+        notaCompartidaId={notaCompartidaIdInput ?? null}
         onClose={() => setMostrarParticipantes(false)}
       />
     </Modal>
