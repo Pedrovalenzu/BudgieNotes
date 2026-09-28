@@ -100,3 +100,7 @@ Shared notes need your own Supabase project (the free plan is enough).
 
 - [ ] Push notifications when someone edits a shared note
 - [ ] Android home screen widget
+
+## License
+
+This project is licensed under the [GNU General Public License v3.0](LICENSE).
