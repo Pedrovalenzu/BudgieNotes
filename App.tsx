@@ -815,6 +815,13 @@ function ModalEditorNota({
   const cambiosSinGuardarRef = useRef(false);
   const timeoutAutoguardadoRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const guardadoEnCursoRef = useRef(false);
+  // `guardar` se redefine en cada render y lee el estado (esCompartidaInput, pinInput, tituloInput...)
+  // de closure. Si el timeout del debounce llamara directamente a `guardar`, se quedaría con la
+  // versión de la función capturada en el render donde se llamó a dispararAutoguardado() — que
+  // puede no reflejar todavía cambios de estado hechos en ese mismo instante (p. ej. `setPinInput`
+  // justo antes no es visible aún en esa misma pasada). Por eso el timeout llama siempre a
+  // `guardarRef.current`, que un efecto mantiene apuntando a la versión más reciente de `guardar`.
+  const guardarRef = useRef<(forzar?: boolean, mostrarSpinner?: boolean) => Promise<boolean>>(async () => true);
   // Identificadores de la nota compartida en Supabase: arrancan con lo que traía `nota`, pero a
   // partir de ahí los mantiene el propio guardado, no `nota` (que se queda congelado con los datos
   // de cuando se abrió el editor) — si no, cada ciclo de autoguardado volvería a crear una nota
@@ -900,12 +907,11 @@ function ModalEditorNota({
     if (timeoutAutoguardadoRef.current) clearTimeout(timeoutAutoguardadoRef.current);
     timeoutAutoguardadoRef.current = setTimeout(() => {
       timeoutAutoguardadoRef.current = null;
-      guardar(false, false);
+      guardarRef.current(false, false);
     }, 700);
   };
 
   const alternarCompartida = async () => {
-    marcarCambio();
     const nuevoValor = !esCompartidaInput;
     setEsCompartidaInput(nuevoValor);
     if (nuevoValor && !pinInput) {
@@ -913,18 +919,19 @@ function ModalEditorNota({
       setPinInput(pin);
       setSalInput(sal);
     }
+    dispararAutoguardado();
   };
 
   const elegirDuracion = (horas: number) => {
-    marcarCambio();
     setExpiraEnInput(Date.now() + horas * 60 * 60 * 1000);
     setMostrarOpcionesCaducidad(false);
+    dispararAutoguardado();
   };
 
   const quitarCaducidad = () => {
-    marcarCambio();
     setExpiraEnInput(undefined);
     setMostrarOpcionesCaducidad(false);
+    dispararAutoguardado();
   };
 
   const seleccionarImagen = async () => {
@@ -1079,6 +1086,12 @@ function ModalEditorNota({
       guardadoEnCursoRef.current = false;
     }
   };
+
+  // Se ejecuta tras cada render para que guardarRef.current siempre sea la versión de `guardar` con
+  // el estado más reciente (ver el comentario junto a la declaración de guardarRef, más arriba).
+  useEffect(() => {
+    guardarRef.current = guardar;
+  });
 
   // Guarda (si hace falta) y cierra el editor — usado al pulsar atrás, el botón "Guardar" y el
   // botón físico/gesto de atrás. Si el guardado no llega a completarse (p. ej. surge un conflicto
@@ -1288,8 +1301,8 @@ function ModalEditorNota({
               />
               <TouchableOpacity
                 onPress={() => {
-                  marcarCambio();
                   setFavoritaInput(v => !v);
+                  dispararAutoguardado();
                 }}
                 hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
                 style={styles.botonFavorita}
